@@ -2,10 +2,18 @@
 
 """
 This script trains a simple DQN in the SuperMarioBros-v0 environment.
-Each frame of the game is displayed in an OpenCV window
+Each frame of the game is displayed in an OpenCV window (scaled 2x)
 and simultaneously written to an MP4 video file.
 If you interrupt the process with CTRL + C, the video file
 will not be corrupted because we release the VideoWriter in a finally block.
+
+Additionally, we have integrated checkpoint saving and loading
+so that you can resume training from a previously saved state.
+
+We also added logic to automatically select the best available device:
+- Apple Metal (MPS) if on macOS with Apple Silicon,
+- NVIDIA GPU (CUDA) if available,
+- otherwise CPU.
 """
 
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -58,9 +66,17 @@ except ImportError:
     print("if you want to further process the generated .mp4 later.\n")
 
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-# 5) Automatically choose device (CPU / GPU)
+# 5) Device selection (CPU / CUDA / Apple Metal if available)
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+if torch.backends.mps.is_available():
+    device = torch.device("mps")
+    print("Using Apple Metal (MPS) device.")
+elif torch.cuda.is_available():
+    device = torch.device("cuda")
+    print("Using NVIDIA CUDA device.")
+else:
+    device = torch.device("cpu")
+    print("Using CPU device.")
 
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 # 6) Helper function: Frame preprocessing
@@ -198,12 +214,63 @@ video_filename = os.path.join(video_folder, "mario_run.mp4")
 writer = None  # VideoWriter is initialized only when we know the frame size
 
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-# 14) Main training function
+# 14) Checkpoint saving and loading
+# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+def save_checkpoint(filename="checkpoint.pth"):
+    """
+    Saves the current training state (network weights, optimizer,
+    epsilon, steps_done, and replay memory) to a file.
+    """
+    checkpoint = {
+        "policy_net": policy_net.state_dict(),
+        "target_net": target_net.state_dict(),
+        "optimizer": optimizer.state_dict(),
+        "epsilon": epsilon,
+        "steps_done": steps_done,
+        # Warning: Saving replay memory can be large. Consider skipping it or limiting size.
+        "memory": list(memory)
+    }
+    torch.save(checkpoint, filename)
+    print(f"[INFO] Checkpoint saved to {filename}")
+
+def load_checkpoint(filename="checkpoint.pth"):
+    """
+    Loads a previously saved training state into the current session.
+    
+    Make sure to define exactly the same network architecture
+    before calling load_state_dict(), otherwise the weight arrays
+    won't match the layers.
+    """
+    global policy_net, target_net, optimizer, epsilon, steps_done, memory
+
+    if not os.path.exists(filename):
+        print(f"[WARNING] Checkpoint file '{filename}' does not exist. Loading skipped.")
+        return
+
+    checkpoint = torch.load(filename, map_location=device)
+    
+    # The neural network architecture must match exactly the definition you had when saving.
+    policy_net.load_state_dict(checkpoint["policy_net"])
+    target_net.load_state_dict(checkpoint["target_net"])
+    optimizer.load_state_dict(checkpoint["optimizer"])
+
+    epsilon = checkpoint["epsilon"]
+    steps_done = checkpoint["steps_done"]
+
+    memory.clear()
+    memory.extend(checkpoint["memory"])
+
+    print(f"[INFO] Checkpoint loaded from {filename}")
+
+# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+# 15) Main training function
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 def main():
     global steps_done, epsilon, writer
 
     num_episodes = 20
+    zoom_factor = 2.0  # scale factor for the display window (2x zoom)
+
     for episode in range(num_episodes):
         # Gym reset returns (obs, info), obs is in "rgb_array" format
         obs, info = env.reset()
@@ -224,24 +291,36 @@ def main():
 
         # Loop until episode is finished
         while not done:
-            # 1) Live display in the OpenCV window ("Mario")
-            bgr_frame = cv2.cvtColor(obs, cv2.COLOR_RGB2BGR)  # Gym provides RGB, OpenCV wants BGR
-            cv2.imshow("Mario", bgr_frame)
+            # 1) Convert from RGB to BGR for OpenCV
+            bgr_frame = cv2.cvtColor(obs, cv2.COLOR_RGB2BGR)
+
+            # 2) Upscale (zoom) the frame for the live display only
+            #    We'll keep the original frame for video writing.
+            display_frame = cv2.resize(
+                bgr_frame, 
+                None,  # no explicit size, we'll use fx, fy
+                fx=zoom_factor, 
+                fy=zoom_factor, 
+                interpolation=cv2.INTER_NEAREST
+            )
+
+            # Show the upscaled frame in the OpenCV window
+            cv2.imshow("Mario", display_frame)
             cv2.waitKey(1)
 
-            # 2) Write the frame to the video
+            # 3) Write the *original* frame to the video (not the upscaled one)
             writer.write(bgr_frame)
 
-            # 3) Select action (Epsilon-Greedy)
+            # 4) Select action (Epsilon-Greedy)
             action = select_action(state.unsqueeze(0))  # -> shape [1,1,84,84]
             next_obs, reward, terminated, truncated, info = env.step(action.item())
             done = terminated or truncated
 
-            # 4) Next state
+            # 5) Next state
             next_state_arr = preprocess_observation(next_obs)
             next_state = torch.tensor(next_state_arr, dtype=torch.float32, device=device)
 
-            # 5) Fill the ReplayMemory
+            # 6) Fill the ReplayMemory
             memory.append((
                 state.cpu().numpy(),
                 action.item(),
@@ -250,24 +329,28 @@ def main():
                 float(done)
             ))
 
-            # 6) Prepare for the next step
+            # 7) Prepare for the next step
             state = next_state
             obs = next_obs
             total_reward += reward
 
-            # 7) Training / Backprop
+            # 8) Training / Backprop
             optimize_model()
             steps_done += 1
             epsilon = max(MIN_EPSILON, epsilon * EPSILON_DECAY)
 
-            # 8) Update the target net
+            # 9) Update the target net
             if steps_done % UPDATE_TARGET == 0:
                 target_net.load_state_dict(policy_net.state_dict())
 
         print(f"Episode {episode + 1}, Reward: {total_reward}")
 
+        # Optionally save checkpoint every N episodes
+        if (episode + 1) % 5 == 0:
+            save_checkpoint("checkpoint.pth")
+
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-# 15) Cleanup function (always called at the end)
+# 16) Cleanup function (always called at the end)
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 def cleanup():
     """
@@ -286,13 +369,27 @@ def cleanup():
     print(f"Video written to: {video_filename}")
 
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-# 16) Main guard (entry point) + exception catching
+# 17) Main guard (entry point) + exception catching
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 if __name__ == "__main__":
+    # Ask user whether to start a new training or load from a checkpoint
+    user_input = input("Start new training (n) or load from checkpoint (l)? [n/l]: ")
+    if user_input.lower() == 'l':
+        print("Loading checkpoint...")
+        load_checkpoint("checkpoint.pth")
+    else:
+        print("Starting new training from scratch...")
+        # Optionally reset variables if you want a guaranteed clean start
+        # epsilon = 1.0
+        # steps_done = 0
+        # memory.clear()
+
     try:
         main()
     except KeyboardInterrupt:
         print("\nManual interrupt (Ctrl + C).")
     finally:
         # The finally block is always executed, regardless of normal exit or exception
+        # Save a final checkpoint
+        save_checkpoint("checkpoint_final.pth")
         cleanup()
