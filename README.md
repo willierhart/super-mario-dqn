@@ -110,4 +110,3 @@ Feel free to open an **issue** or make a **pull request** if you find any bugs o
 ---
 
 **Enjoy training Mario with your own DQN!**
-```
