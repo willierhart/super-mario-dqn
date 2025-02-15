@@ -1,0 +1,7 @@
+gym==0.26.2
+gym-super-mario-bros==7.4.0
+torch==2.4.1
+torchvision==0.19.1
+opencv-python==4.11.0.86
+numpy==1.24.4
+moviepy==1.0.3
