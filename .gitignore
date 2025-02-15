@@ -1,0 +1,11 @@
+# Ignoriere macOS-spezifische Dateien
+.DS_Store
+
+# Ignoriere Python Cache-Ordner
+__pycache__/
+*.pyc
+*.pyo
+
+# Optional: ignoriere weitere übliche versteckte Dateien oder Umgebungsdateien
+*.swp
+.env
