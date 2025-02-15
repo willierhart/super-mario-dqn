@@ -1,21 +1,21 @@
 #!/usr/bin/env python3
 
 """
-Dieses Skript trainiert ein einfaches DQN in der SuperMarioBros-v0-Umgebung.
-Dabei wird jeder Frame des Spiels per OpenCV in einem Fenster angezeigt,
-und zugleich in ein MP4-Video geschrieben.
-Ein Abbruch per STRG + C erzeugt keine beschädigte Videodatei,
-da wir den VideoWriter in einem finally-Block freigeben.
+This script trains a simple DQN in the SuperMarioBros-v0 environment.
+Each frame of the game is displayed in an OpenCV window
+and simultaneously written to an MP4 video file.
+If you interrupt the process with CTRL + C, the video file
+will not be corrupted because we release the VideoWriter in a finally block.
 """
 
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-# 1) Multiprocessing-Fix (wichtig für MacOS, teils auch für Linux/Windows)
+# 1) Multiprocessing fix (important for macOS, sometimes also for Linux/Windows)
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 import multiprocessing
 multiprocessing.set_start_method("spawn", force=True)
 
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-# 2) Standard-Bibliotheken und Warnungen
+# 2) Standard libraries and warnings
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 import warnings
 import os
@@ -23,7 +23,7 @@ import time
 import random
 
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-# 3) Externe Bibliotheken (OpenCV, Gym, PyTorch, Numpy etc.)
+# 3) External libraries (OpenCV, Gym, PyTorch, Numpy, etc.)
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 import cv2
 import gym
@@ -34,7 +34,7 @@ import torch.optim as optim
 from collections import deque
 from torchvision import transforms as T
 
-# Gym-Warnungen unterdrücken (optional)
+# Suppress Gym warnings (optional)
 warnings.filterwarnings("ignore", message="Overwriting existing videos")
 warnings.filterwarnings("ignore", message="The result returned by `env.reset()` was not a tuple")
 warnings.filterwarnings("ignore", message="Disabling video recorder")
@@ -44,49 +44,49 @@ warnings.filterwarnings("ignore", message="`np.bool8` is a deprecated alias for 
 warnings.filterwarnings("ignore", message="The environment creator metadata doesn't include `render_modes`")
 
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-# 4) gym_super_mario_bros-spezifische Importe
+# 4) Imports specific to gym_super_mario_bros
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 import gym_super_mario_bros
 from gym_super_mario_bros.actions import SIMPLE_MOVEMENT
 from nes_py.wrappers import JoypadSpace
 
-# Nur ein Hinweis, falls MoviePy nicht installiert ist
+# Just a note in case MoviePy is not installed
 try:
     import moviepy  # noqa
 except ImportError:
-    print("Achtung: MoviePy ist nicht installiert! Bitte 'pip install moviepy' ausführen,")
-    print("falls du das erzeugte .mp4 nachträglich weiterverarbeiten willst.\n")
+    print("Warning: MoviePy is not installed! Please run 'pip install moviepy'")
+    print("if you want to further process the generated .mp4 later.\n")
 
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-# 5) Gerät (CPU / GPU) automatisch wählen
+# 5) Automatically choose device (CPU / GPU)
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-# 6) Hilfsfunktion: Frame-Vorverarbeitung (Preprocessing)
+# 6) Helper function: Frame preprocessing
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 def preprocess_observation(obs):
     """
-    Wandelt das Eingabe-Frame (RGB) in Graustufen um,
-    skaliert es auf [84x84], und gibt ein numpy-Array
-    mit Form [1, 84, 84] zurück (1=Kanal).
-    Anschließend normalisieren wir die Pixelwerte von 0..255 auf 0..1.
+    Converts the input frame (RGB) to grayscale,
+    rescales it to [84x84], and returns a numpy array
+    with shape [1, 84, 84] (1=channel).
+    Then we normalize pixel values from 0..255 to 0..1.
     """
-    # obs sollte shape (H, W, 3) = RGB haben
+    # obs should be shape (H, W, 3) = RGB
     if obs.ndim == 3:
-        obs = cv2.cvtColor(obs, cv2.COLOR_RGB2GRAY)  # zu Graustufen
+        obs = cv2.cvtColor(obs, cv2.COLOR_RGB2GRAY)  # to grayscale
     obs = cv2.resize(obs, (84, 84), interpolation=cv2.INTER_AREA)  # resize
     obs = np.expand_dims(obs, axis=0)  # [1, 84, 84]
     return obs / 255.0
 
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-# 7) DQN-Netzwerk-Klasse
+# 7) DQN network class
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 class DQN(nn.Module):
     """
-    Einfaches DQN mit 3 Convolution-Layern und 2 dichten Schichten.
-    Erwartet input_dim Kanäle (meist 1 für Graustufen) und gibt
-    output_dim Aktionen zurück (z.B. 7 bei SIMPLE_MOVEMENT).
+    A simple DQN with 3 convolutional layers and 2 dense layers.
+    Expects input_dim channels (usually 1 for grayscale) and returns
+    output_dim actions (e.g. 7 for SIMPLE_MOVEMENT).
     """
     def __init__(self, input_dim, output_dim):
         super().__init__()
@@ -107,52 +107,52 @@ class DQN(nn.Module):
         return self.network(x)
 
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-# 8) Hyperparameter und globale Variablen
+# 8) Hyperparameters and global variables
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-GAMMA = 0.99         # Discount-Faktor
-LR = 0.00025         # Lernrate
-MEMORY_SIZE = 10000  # Replay-Memory-Größe
+GAMMA = 0.99         # Discount factor
+LR = 0.00025         # Learning rate
+MEMORY_SIZE = 10000  # Replay memory size
 BATCH_SIZE = 32
 EPSILON_DECAY = 0.9995
 MIN_EPSILON = 0.01
-UPDATE_TARGET = 1000  # alle 1000 Steps Target-Net synchronisieren
+UPDATE_TARGET = 1000  # synchronize target net every 1000 steps
 
-# Zähler für Trainingsschritte + Epsilon-Wert
+# Counters for training steps + epsilon value
 steps_done = 0
 epsilon = 1.0
 
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-# 9) Environment ohne RecordVideo - Wir nehmen frames selbst auf!
+# 9) Environment without RecordVideo - we record frames ourselves!
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 env = gym_super_mario_bros.make(
     "SuperMarioBros-v0",
-    apply_api_compatibility=True,  # neue Gym-API (5 Rückgabewerte)
-    render_mode="rgb_array"       # wichtig, damit obs Frames=RGB-Array liefert
+    apply_api_compatibility=True,  # new Gym API (5 return values)
+    render_mode="rgb_array"        # important so that obs is an RGB array
 )
 env = JoypadSpace(env, SIMPLE_MOVEMENT)
 
-# Aktionen
+# Actions
 num_actions = env.action_space.n
 
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-# 10) DQN- und Replay-Speicher initialisieren
+# 10) Initialize DQN and replay buffer
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 policy_net = DQN(1, num_actions).to(device)
 target_net = DQN(1, num_actions).to(device)
 target_net.load_state_dict(policy_net.state_dict())
-target_net.eval()  # Wir nutzen das Target-Net nur für Q-Targets
+target_net.eval()  # We only use the target net for Q-targets
 
 optimizer = optim.Adam(policy_net.parameters(), lr=LR)
 memory = deque(maxlen=MEMORY_SIZE)
 
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-# 11) Aktionen wählen: Epsilon-Greedy
+# 11) Action selection: Epsilon-Greedy
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 def select_action(state_tensor):
     """
-    Für den aktuellen Zustand (Batch=1, Channels=1, 84, 84) wähle
-    entweder eine zufällige Aktion (mit Wk. epsilon) oder
-    die beste Aktion laut policy_net (mit Wk. 1-epsilon).
+    For the current state (batch=1, channels=1, 84, 84), either choose
+    a random action (with probability epsilon) or
+    the best action according to policy_net (with probability 1-epsilon).
     """
     global epsilon, steps_done
     if random.random() < epsilon:
@@ -162,11 +162,11 @@ def select_action(state_tensor):
             return policy_net(state_tensor).max(dim=1)[1].view(1, 1)
 
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-# 12) Training: Replay-Sampling + Backprop
+# 12) Training: Replay sampling + backprop
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 def optimize_model():
     if len(memory) < BATCH_SIZE:
-        return  # noch zu wenige Daten, kein Training
+        return  # not enough data yet, no training
     batch = random.sample(memory, BATCH_SIZE)
     states, actions, rewards, next_states, dones = zip(*batch)
 
@@ -180,7 +180,7 @@ def optimize_model():
     q_values = policy_net(states).gather(1, actions.unsqueeze(1)).squeeze()
     # max Q(s', a')
     next_q_values = target_net(next_states).max(dim=1)[0]
-    # Bellman-Update
+    # Bellman update
     expected_q_values = rewards + (GAMMA * next_q_values * (1 - dones))
 
     loss = nn.functional.mse_loss(q_values, expected_q_values)
@@ -189,59 +189,59 @@ def optimize_model():
     optimizer.step()
 
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-# 13) Custom-Videoaufzeichnung mit OpenCV VideoWriter
+# 13) Custom video recording with OpenCV VideoWriter
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 video_folder = f"./videos_custom_{int(time.time())}_{random.randint(0,9999)}"
 os.makedirs(video_folder, exist_ok=True)
 
 video_filename = os.path.join(video_folder, "mario_run.mp4")
-writer = None  # VideoWriter wird erst initialisiert, wenn wir die Frame-Größe kennen
+writer = None  # VideoWriter is initialized only when we know the frame size
 
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-# 14) Haupttrainingsfunktion
+# 14) Main training function
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 def main():
     global steps_done, epsilon, writer
 
     num_episodes = 20
     for episode in range(num_episodes):
-        # Gym-Reset liefert (obs, info), obs ist im "rgb_array"-Format
+        # Gym reset returns (obs, info), obs is in "rgb_array" format
         obs, info = env.reset()
 
-        # Falls der VideoWriter noch nicht existiert, Größe anlegen
+        # If the VideoWriter doesn't exist yet, create it using the frame size
         if writer is None:
-            height, width, channels = obs.shape  # z.B. (240, 256, 3)
+            height, width, channels = obs.shape  # e.g. (240, 256, 3)
             fourcc = cv2.VideoWriter_fourcc(*'mp4v')
             fps = 30.0
             writer = cv2.VideoWriter(video_filename, fourcc, fps, (width, height))
 
-        # Zustand in Graustufen, [1,84,84], Torch-Format
+        # Convert state to grayscale, [1,84,84], Torch format
         state_arr = preprocess_observation(obs)
         state = torch.tensor(state_arr, dtype=torch.float32, device=device)
 
         done = False
         total_reward = 0.0
 
-        # Schleife bis Episode beendet
+        # Loop until episode is finished
         while not done:
-            # 1) Live-Anzeige im OpenCV-Fenster ("Mario")
-            bgr_frame = cv2.cvtColor(obs, cv2.COLOR_RGB2BGR)  # Gym liefert RGB, OpenCV mag BGR
+            # 1) Live display in the OpenCV window ("Mario")
+            bgr_frame = cv2.cvtColor(obs, cv2.COLOR_RGB2BGR)  # Gym provides RGB, OpenCV wants BGR
             cv2.imshow("Mario", bgr_frame)
             cv2.waitKey(1)
 
-            # 2) Frame ins Video schreiben
+            # 2) Write the frame to the video
             writer.write(bgr_frame)
 
-            # 3) Aktion wählen (Epsilon-Greedy)
+            # 3) Select action (Epsilon-Greedy)
             action = select_action(state.unsqueeze(0))  # -> shape [1,1,84,84]
             next_obs, reward, terminated, truncated, info = env.step(action.item())
             done = terminated or truncated
 
-            # 4) Nächsten Zustand
+            # 4) Next state
             next_state_arr = preprocess_observation(next_obs)
             next_state = torch.tensor(next_state_arr, dtype=torch.float32, device=device)
 
-            # 5) ReplayMemory befüllen
+            # 5) Fill the ReplayMemory
             memory.append((
                 state.cpu().numpy(),
                 action.item(),
@@ -250,7 +250,7 @@ def main():
                 float(done)
             ))
 
-            # 6) Auf den nächsten Schritt vorbereiten
+            # 6) Prepare for the next step
             state = next_state
             obs = next_obs
             total_reward += reward
@@ -260,39 +260,39 @@ def main():
             steps_done += 1
             epsilon = max(MIN_EPSILON, epsilon * EPSILON_DECAY)
 
-            # 8) Target-Net aktualisieren
+            # 8) Update the target net
             if steps_done % UPDATE_TARGET == 0:
                 target_net.load_state_dict(policy_net.state_dict())
 
         print(f"Episode {episode + 1}, Reward: {total_reward}")
 
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-# 15) Cleanup-Funktion (Wird IMMER am Ende aufgerufen)
+# 15) Cleanup function (always called at the end)
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 def cleanup():
     """
-    Schließt Environment, zerstört OpenCV-Fenster und gibt den VideoWriter frei,
-    damit das MP4-Video sauber finalisiert wird.
+    Closes the environment, destroys OpenCV windows, and releases the VideoWriter
+    so the MP4 video can be properly finalized.
     """
-    print("Clean up: Environment schließen, Video finalisieren ...")
+    print("Clean up: Closing environment, finalizing video ...")
     try:
         env.close()
     except Exception as e:
-        print("Warnung beim env.close():", e)
+        print("Warning on env.close():", e)
     cv2.destroyAllWindows()
     global writer
     if writer is not None:
         writer.release()
-    print(f"Video geschrieben nach: {video_filename}")
+    print(f"Video written to: {video_filename}")
 
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-# 16) Main-Guard (Einstiegspunkt) + Exception-Abfangen
+# 16) Main guard (entry point) + exception catching
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 if __name__ == "__main__":
     try:
         main()
     except KeyboardInterrupt:
-        print("\nManueller Abbruch (Strg + C).")
+        print("\nManual interrupt (Ctrl + C).")
     finally:
-        # finally-Block wird ausgeführt, egal ob normaler Abbruch oder Exception
+        # The finally block is always executed, regardless of normal exit or exception
         cleanup()
