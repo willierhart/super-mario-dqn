@@ -89,8 +89,15 @@ Below are instructions on how to set up a **conda environment** (e.g., `mario_en
    ```bash
    pip install -r requirements.txt
    ```
+   
+5. **Install PyTorch with CUDA (Optional, for GPU acceleration)**  
+   If you have an NVIDIA GPU and want CUDA support, install PyTorch with the appropriate CUDA version. For example, CUDA 11.8:
+   ```bash
+   pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+   ```
+   Make sure you have a compatible NVIDIA driver and CUDA toolkit for your GPU before installing.
 
-5. **(macOS only) Potential fork-safety issues**:  
+6. **(macOS only) Potential fork-safety issues**:  
    If you run into segmentation faults on macOS, you may need:
    ```bash
    export OBJC_DISABLE_INITIALIZE_FORK_SAFETY=YES
@@ -118,13 +125,6 @@ If you are on **Windows**, you may need some extra setup:
 
    For more details, see:  
    [How to install Visual C++ Build Tools (StackOverflow)](https://stackoverflow.com/questions/40504552/how-to-install-visual-c-build-tools)
-
-2. **Install PyTorch with CUDA (Optional, for GPU acceleration)**  
-   If you have an NVIDIA GPU and want CUDA support, install PyTorch with the appropriate CUDA version. For example, CUDA 11.8:
-   ```bash
-   pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
-   ```
-   Make sure you have a compatible NVIDIA driver and CUDA toolkit for your GPU before installing.
 
 ---
 
