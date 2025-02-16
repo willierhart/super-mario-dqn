@@ -2,6 +2,8 @@
 
 This repository demonstrates a **Deep Q-Network (DQN) training** process on the classic *Super Mario Bros* environment using [gym_super_mario_bros](https://github.com/Kautenja/gym-super-mario-bros). It **simultaneously** displays the live gameplay in an OpenCV window **and** continuously records it into an `.mp4` video file. If you interrupt the script (e.g., with **Ctrl + C**), the video is properly finalized and not corrupted.
 
+![image](https://github.com/user-attachments/assets/32573929-c44e-47cb-8f35-628ef13a2f15)
+
 ---
 
 ## 1. Overview
