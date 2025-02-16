@@ -99,6 +99,35 @@ Below are instructions on how to set up a **conda environment** (e.g., `mario_en
 
 ---
 
+### 2.3 Additional Windows-Only Steps
+
+If you are on **Windows**, you may need some extra setup:
+
+1. **Install Visual C++ Build Tools**  
+   This is required for compiling certain Python packages. Depending on your version of Windows, you can use one of the following commands (via [winget](https://learn.microsoft.com/en-us/windows/package-manager/winget/)):
+
+   - **Windows 10**  
+     ```bash
+     winget install Microsoft.VisualStudio.2022.BuildTools --force --override "--wait --passive --add Microsoft.VisualStudio.Component.VC.Tools.x86.x64 --add Microsoft.VisualStudio.Component.Windows10SDK"
+     ```
+
+   - **Windows 11**  
+     ```bash
+     winget install Microsoft.VisualStudio.2022.BuildTools --force --override "--wait --passive --add Microsoft.VisualStudio.Component.VC.Tools.x86.x64 --add Microsoft.VisualStudio.Component.Windows11SDK.22621"
+     ```
+
+   For more details, see:  
+   [How to install Visual C++ Build Tools (StackOverflow)](https://stackoverflow.com/questions/40504552/how-to-install-visual-c-build-tools)
+
+2. **Install PyTorch with CUDA (Optional, for GPU acceleration)**  
+   If you have an NVIDIA GPU and want CUDA support, install PyTorch with the appropriate CUDA version. For example, CUDA 11.8:
+   ```bash
+   pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
+   ```
+   Make sure you have a compatible NVIDIA driver and CUDA toolkit for your GPU before installing.
+
+---
+
 ## 3. Usage
 
 1. **Clone or download** this repository:
