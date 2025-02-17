@@ -15,10 +15,10 @@ This repository demonstrates a **Deep Q-Network (DQN) training** process on the 
 - **Best Run Recording**: In addition to the full run video, the script also tracks the episode with the highest total reward. The best episode is recorded separately and saved as `mario_best_run_<reward>.mp4` in the same run folder (where `<reward>` is the achieved reward, formatted to two decimal places). This allows you to quickly identify and replay the best performance.
 - **Graceful shutdown**: Whether the training stops normally or via **Ctrl + C**, the environment and video file are closed correctly, leaving you with a playable recording.
 - **Checkpointing & Resuming**: Save and load model checkpoints (network weights, optimizer state, training counters, replay memory, etc.) to resume training.
-  - A checkpoint is automatically saved every 5 episodes as `checkpoint.pth`.
-  - When exiting (even via a KeyboardInterrupt), a final checkpoint is saved as `checkpoint_final.pth`.
+  - A checkpoint is automatically saved every 50 episodes as `checkpoint.pth`.
+  - Upon termination (even via a KeyboardInterrupt), a final checkpoint is saved as `checkpoint_final.pth`.
+  - **Important:** Due to the extensive replay memory and saved states, checkpoint files can grow to approximately **3.5GB** in size, each!
 - **Automatic Device Selection**: The script automatically checks for Apple Metal (MPS) on macOS, NVIDIA GPU (CUDA), or falls back to CPU—whichever is available.
-- **Multiprocessing Compatibility**: To avoid issues with process creation (especially on macOS), the script uses `multiprocessing.set_start_method("spawn", force=True)`.
 - **Logging**: Episode results (including total rewards and timestamps) are logged to a `log.txt` file in the same run folder where the video is saved.
 - **Custom Reward Shaping**: The reward function has been tailored to guide the training process:
   - **Forward Progress**: If Mario's current `x_pos` is greater than in the previous step, a bonus of +1 is added.
@@ -26,6 +26,16 @@ This repository demonstrates a **Deep Q-Network (DQN) training** process on the 
   - **Death Penalty**: If Mario dies (i.e., the episode terminates), a significant penalty of -50 is applied.
   - **Goal Reward**: Reaching the flag (completing the level) grants a large bonus of +1000.
   - **Scaling**: Finally, rewards are scaled by dividing by 10 and clipped to the range `[-1, 1]` to stabilize training.
+
+### Enhanced DQN Training Features
+
+This implementation includes several improvements over the standard DQN algorithm:
+
+- **Frame Stacking**: Uses 4 consecutive frames as the state representation, providing temporal context to the agent.
+- **Prioritized Experience Replay**: Implements prioritized replay with importance sampling and dynamic priority updates to improve learning efficiency.
+- **Huber Loss**: Replaces the Mean Squared Error (MSE) loss with the Huber (smooth L1) loss for improved training stability.
+- **Learning Rate Scheduler**: Introduces a learning rate scheduler to decay the learning rate over training steps, promoting better convergence.
+- **Optimized Replay Buffer Conversion**: Utilizes `torch.from_numpy` for efficient conversion of replay buffer batches, reducing computational overhead.
 
 ---
 
@@ -183,7 +193,8 @@ Typical files in this repository include:
   - Multiprocessing compatibility fix (`spawn` start method)
   - Checkpoint saving/loading (resuming training)
   - DQN architecture and replay buffer logic
-  - **Custom Reward Shaping**: Rewards are adjusted to encourage forward progress, penalize regression and death, and significantly reward level completion by reaching the flag.
+  - **Enhanced DQN Features**: Frame stacking, prioritized experience replay, Huber loss, learning rate scheduler, and optimized replay buffer batch conversion.
+  - Custom Reward Shaping: Rewards are adjusted to encourage forward progress, penalize regression and death, and significantly reward level completion by reaching the flag.
   - Training loop with live OpenCV display and continuous `.mp4` recording
   - Logging to a `log.txt` file
 - **`requirements.txt`**  
@@ -199,7 +210,7 @@ Typical files in this repository include:
 The script supports **saving and loading** checkpoints so you can stop training at any point and later resume without losing progress:
 
 - **Checkpoint Saving**  
-  - A checkpoint is automatically saved every 5 episodes as `checkpoint.pth`.
+  - A checkpoint is automatically saved every 50 episodes as `checkpoint.pth`.
   - Upon termination (e.g., via Ctrl + C), a final checkpoint is saved as `checkpoint_final.pth`, ensuring that training progress is preserved.
   
 - **Checkpoint Loading**  
@@ -232,4 +243,4 @@ Feel free to open an **issue** or make a **pull request** if you find any bugs o
 
 ---
 
-**Enjoy training Mario with your own DQN!**
+**Enjoy training Mario with your own enhanced DQN!**
