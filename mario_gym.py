@@ -3,7 +3,7 @@
 """
 This script trains a simple DQN in the SuperMarioBros-v0 environment.
 Each frame of the game is displayed in an OpenCV window (scaled 2x)
-and simultaneously written to an MP4 video file.
+and simultaneously written to an MP4 video file (with a 2x zoom).
 If you interrupt the process with CTRL + C, the video file
 will not be corrupted because we release the VideoWriter in a finally block.
 
@@ -210,10 +210,12 @@ def optimize_model():
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 # 13) Custom video recording with OpenCV VideoWriter
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-video_folder = f"./videos_custom_{int(time.time())}_{random.randint(0,9999)}"
-os.makedirs(video_folder, exist_ok=True)
+# Create a run folder with date and time in the name (no spaces, underscore separated)
+run_folder = f"./{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}_run"
+os.makedirs(run_folder, exist_ok=True)
 
-video_filename = os.path.join(video_folder, "mario_run.mp4")
+# Set the video file path within the run folder
+video_filepath = os.path.join(run_folder, "mario_run.mp4")
 writer = None  # VideoWriter is created only after determining the frame size
 
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -270,22 +272,24 @@ def main():
     global steps_done, epsilon, writer
 
     num_episodes = 20
-    zoom_factor = 2.0  # scale factor for the display window (2x zoom)
+    zoom_factor = 2.0  # scale factor for both display and video recording (2x zoom)
 
-    # Create a log file in the video folder (append mode)
-    log_filename = os.path.join(video_folder, "log.txt")
+    # Create a log file in the run folder (append mode)
+    log_filename = os.path.join(run_folder, "log.txt")
     log_file = open(log_filename, "a")
 
     for episode in range(num_episodes):
         # Reset the environment; obs is an RGB array (Gym returns (obs, info))
         obs, info = env.reset()
 
-        # If VideoWriter is not initialized yet, create it using the frame size
+        # If VideoWriter is not initialized yet, create it using the upscaled frame size
         if writer is None:
-            height, width, channels = obs.shape  # e.g. (240, 256, 3)
+            height, width, channels = obs.shape  # original frame size (e.g. 240x256)
+            new_width = int(width * zoom_factor)
+            new_height = int(height * zoom_factor)
             fourcc = cv2.VideoWriter_fourcc(*'mp4v')
             fps = 30.0
-            writer = cv2.VideoWriter(video_filename, fourcc, fps, (width, height))
+            writer = cv2.VideoWriter(video_filepath, fourcc, fps, (new_width, new_height))
 
         # Convert state to grayscale, shape [1, 84, 84], for Torch
         state_arr = preprocess_observation(obs)
@@ -299,8 +303,7 @@ def main():
             # 1) Convert from RGB to BGR for OpenCV
             bgr_frame = cv2.cvtColor(obs, cv2.COLOR_RGB2BGR)
 
-            # 2) Upscale (zoom) the frame for live display only.
-            #    The original frame is used for video recording.
+            # 2) Upscale (zoom) the frame for both live display and video recording.
             display_frame = cv2.resize(
                 bgr_frame,
                 None,  # no explicit size; use fx, fy instead
@@ -313,8 +316,8 @@ def main():
             cv2.imshow("Mario", display_frame)
             cv2.waitKey(1)
 
-            # 4) Write the original frame to the video (not the upscaled one)
-            writer.write(bgr_frame)
+            # 4) Write the upscaled frame to the video file
+            writer.write(display_frame)
 
             # 5) Select an action using epsilon-greedy policy
             action = select_action(state.unsqueeze(0))  # shape becomes [1, 1, 84, 84]
@@ -384,7 +387,7 @@ def cleanup():
     global writer
     if writer is not None:
         writer.release()
-    print(f"Video written to: {video_filename}")
+    print(f"Video written to: {video_filepath}")
 
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 # 17) Main guard (entry point) and exception handling
