@@ -1,6 +1,6 @@
 # Super Mario DQN - A Live & Recorded Reinforcement Learning Demo
 
-This repository demonstrates a **Deep Q-Network (DQN) training** process on the classic *Super Mario Bros* environment using [gym_super_mario_bros](https://github.com/Kautenja/gym-super-mario-bros). It **simultaneously** displays the live gameplay in an OpenCV window **and** continuously records it into an `.mp4` video file. If you interrupt the script (e.g., with **Ctrl + C**), the video is properly finalized and not corrupted.
+This repository demonstrates a **Deep Q-Network (DQN) training** process on the classic *Super Mario Bros* environment using [gym_super_mario_bros](https://github.com/Kautenja/gym-super-mario-bros). It **simultaneously** displays live gameplay in an OpenCV window **and** continuously records it into an `.mp4` video file. If you interrupt the script (e.g., with **Ctrl + C**), the video is properly finalized and not corrupted.
 
 ![image](https://github.com/user-attachments/assets/32573929-c44e-47cb-8f35-628ef13a2f15)
 
@@ -9,11 +9,16 @@ This repository demonstrates a **Deep Q-Network (DQN) training** process on the 
 ## 1. Overview
 
 - **Train a DQN** in the [NES Super Mario Bros](https://github.com/Kautenja/gym-super-mario-bros) environment.
-- **Live visualization** via an OpenCV window: watch Mario’s actions in real time (optionally zoomed 2x for better visibility).
-- **Continuous recording**: each frame is directly encoded into an `.mp4` using OpenCV’s `VideoWriter`.
-- **Graceful shutdown**: if you press **Ctrl + C**, the environment and the video file are closed correctly, leaving you with a playable recording.
-- **Checkpointing & Resuming**: Save and load model checkpoints (network weights, replay buffer, etc.) to resume training.
-- **Automatic Device Selection**: The script automatically checks for Apple Metal (MPS), NVIDIA GPU (CUDA), or falls back to CPU.
+- **Live visualization** via an OpenCV window: watch Mario’s actions in real time (displayed with a default 2x zoom for enhanced visibility).
+- **Continuous recording**: each frame is directly encoded into an `.mp4` using OpenCV’s `VideoWriter`.  
+  > **Note:** The video is saved as `mario_run.mp4` inside a run folder automatically named with the current date and time in the format `YYYY-MM-DD_HH-MM-SS_run`.
+- **Graceful shutdown**: whether the training stops normally or via **Ctrl + C**, the environment and video file are closed correctly, leaving you with a playable recording.
+- **Checkpointing & Resuming**: Save and load model checkpoints (network weights, optimizer state, training counters, replay memory, etc.) to resume training.
+  - A checkpoint is automatically saved every 5 episodes as `checkpoint.pth`.
+  - When exiting (even via a KeyboardInterrupt), a final checkpoint is saved as `checkpoint_final.pth`.
+- **Automatic Device Selection**: The script automatically checks for Apple Metal (MPS) on macOS, NVIDIA GPU (CUDA), or falls back to CPU—whichever is available.
+- **Multiprocessing Compatibility**: To avoid issues with process creation (especially on macOS), the script uses `multiprocessing.set_start_method("spawn", force=True)`.
+- **Logging**: Episode results (including total rewards and timestamps) are logged to a `log.txt` file in the same run folder where the video is saved.
 
 ---
 
@@ -93,7 +98,7 @@ Below are instructions on how to set up a **conda environment** (e.g., `mario_en
    ```
    
 5. **Install PyTorch with CUDA (Optional, for GPU acceleration)**  
-   If you have an NVIDIA GPU and want CUDA support, install PyTorch with the appropriate CUDA version. For example, CUDA 11.8:
+   If you have an NVIDIA GPU and want CUDA support, install PyTorch with the appropriate CUDA version. For example, for CUDA 11.8:
    ```bash
    pip3 install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu118
    ```
@@ -146,34 +151,33 @@ If you are on **Windows**, you may need some extra setup:
    python mario_gym.py
    ```
    - A window named **"Mario"** will pop up, showing the live environment (with a default 2x zoom in the display window).
-   - An `.mp4` video is continuously recorded in a folder named `./videos_custom_<timestamp>_<random>`.
-   - Training stops once the specified number of episodes is done, **or** if you hit **Ctrl + C** (KeyboardInterrupt). In either case, the script cleans up gracefully, closes the environment, and finalizes the `.mp4`.
+   - The `.mp4` video is continuously recorded inside an automatically created folder named with the current date and time (e.g., `2025-02-17_14-35-22_run`) and saved as `mario_run.mp4`.
+   - Training stops once the specified number of episodes is completed **or** if you hit **Ctrl + C** (KeyboardInterrupt). In either case, the script cleans up gracefully, closes the environment, and finalizes the video.
 
 ### Observing the Output
 
-- **OpenCV Window**: real-time gameplay (2x zoom in the live window).  
-- **Terminal Output**: logs about the current episode, total reward, etc.  
-- **Video File**: `mario_run.mp4` (or a similar name) inside the `videos_custom_*` folder.
+- **OpenCV Window**: Real-time gameplay (displayed with a 2x zoom).
+- **Terminal Output**: Logs about the current episode, total reward, etc.
+- **Video File**: `mario_run.mp4` inside the run folder.
+- **Log File**: A `log.txt` is created in the run folder, logging episode results with timestamps.
 
 ---
 
 ## 4. Project Structure
 
-Typical files in this repository might include:
+Typical files in this repository include:
 
 - **`mario_gym.py`**  
   The main script containing:
-  - Device selection (Apple Metal MPS, CUDA, or CPU)  
-  - Checkpoint saving/loading (resuming training)  
-  - DQN architecture  
-  - Replay buffer logic  
-  - Training loop  
-  - OpenCV display and continuous `.mp4` recording logic
-
+  - Automatic device selection (Apple Metal MPS, CUDA, or CPU)
+  - Multiprocessing compatibility fix (`spawn` start method)
+  - Checkpoint saving/loading (resuming training)
+  - DQN architecture and replay buffer logic
+  - Training loop with live OpenCV display and continuous `.mp4` recording
+  - Logging to a `log.txt` file
 - **`requirements.txt`**  
   All pinned dependencies for this project.  
   Install them via `pip install -r requirements.txt`.
-
 - **`README.md`**  
   This documentation.
 
@@ -184,25 +188,11 @@ Typical files in this repository might include:
 The script supports **saving and loading** checkpoints so you can stop training at any point and later resume without losing progress:
 
 - **Checkpoint Saving**  
-  Occurs automatically every few episodes (configurable in the code) and upon exit (`finally` block). For instance:
-  ```python
-  if (episode + 1) % 5 == 0:
-      save_checkpoint("checkpoint.pth")
-  ```
-  and in the `finally` block:
-  ```python
-  finally:
-      save_checkpoint("checkpoint_final.pth")
-      cleanup()
-  ```
-  This saves:
-  - `policy_net` and `target_net` weights
-  - `optimizer` state
-  - `epsilon`, `steps_done`
-  - **Optional**: replay memory (may be large)
-
+  - A checkpoint is automatically saved every 5 episodes as `checkpoint.pth`.
+  - Upon termination (e.g., via Ctrl + C), a final checkpoint is saved as `checkpoint_final.pth`, ensuring that training progress is preserved.
+  
 - **Checkpoint Loading**  
-  At the beginning of the script, you can choose:
+  At the beginning of the script, you are prompted to choose whether to start new training or load an existing checkpoint:
   ```python
   user_input = input("Start new training (n) or load from checkpoint (l)? [n/l]: ")
   if user_input.lower() == 'l':
@@ -210,20 +200,18 @@ The script supports **saving and loading** checkpoints so you can stop training 
   else:
       print("Starting new training from scratch...")
   ```
-  This restores all relevant variables (network weights, training counters, replay memory, etc.).
-
-> **Important:** Make sure that you define **exactly the same network architecture** in your code before calling `load_state_dict()`; otherwise, the loaded weight arrays won't match your current model's layers, and an error will occur.
+  This restores all relevant variables (network weights, training counters, replay memory, etc.), so **ensure the network architecture remains unchanged** between saves and loads.
 
 ---
 
 ## 6. Automatic Device Selection
 
-Upon startup, the script checks if it can run on:
-1. **Apple Metal (MPS)** — if available on macOS with Apple Silicon.  
-2. **NVIDIA GPU (CUDA)** — if you have a CUDA-capable GPU and PyTorch with CUDA support.  
-3. **CPU** — default fallback if neither MPS nor CUDA is available.  
+Upon startup, the script automatically selects the best available device:
+1. **Apple Metal (MPS)** — on macOS with Apple Silicon.
+2. **NVIDIA CUDA** — if you have a CUDA-capable GPU and the necessary PyTorch support.
+3. **CPU** — if neither of the above is available.
 
-All model operations then run on the chosen `device`.
+All model operations then run on the chosen device, improving performance where possible.
 
 ---
 
