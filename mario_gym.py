@@ -128,13 +128,13 @@ class DQN(nn.Module):
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 # 8) Hyperparameters and global variables
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-GAMMA = 0.99         # Discount factor
-LR = 0.00025         # Learning rate
-MEMORY_SIZE = 10000  # Replay memory size
+GAMMA = 0.99            # Discount factor
+LR = 0.00025            # Learning rate
+MEMORY_SIZE = 10000     # Replay memory size
 BATCH_SIZE = 32
-EPSILON_DECAY = 0.9995
+EPSILON_DECAY = 0.995   # Faster decay for better learning
 MIN_EPSILON = 0.01
-UPDATE_TARGET = 1000  # synchronize target network every 1000 steps
+UPDATE_TARGET = 500     # Update target network more frequently
 
 # Counters for training steps and epsilon value
 steps_done = 0
@@ -297,6 +297,7 @@ def main():
 
         done = False
         total_reward = 0.0
+        last_x_pos = 0
 
         # Loop until the episode is finished
         while not done:
@@ -323,9 +324,20 @@ def main():
             action = select_action(state.unsqueeze(0))  # shape becomes [1, 1, 84, 84]
             next_obs, reward, terminated, truncated, info = env.step(action.item())
 
-            # 6) If Mario reaches the flag, add a bonus of 1000 points
+            # 6) Reward shaping: Encourage moving right, penalize moving left or dying
+            if info.get("x_pos", 0) > last_x_pos:
+                reward += 1  # Reward for moving forward
+            elif info.get("x_pos", 0) < last_x_pos:
+                reward -= 1  # Penalty for moving backward
+
+            if terminated:
+                reward -= 50  # Penalty for dying
+
             if info.get("flag_get", False):
-                reward += 1000
+                reward += 1000  # Big bonus for reaching the goal
+
+            reward = np.clip(reward / 10, -1, 1)  # Scale rewards to stabilize training
+            last_x_pos = info.get("x_pos", 0)  # Track Mario's progress
 
             done = terminated or truncated
 
