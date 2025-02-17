@@ -214,7 +214,7 @@ def optimize_model():
 run_folder = f"./{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}_run"
 os.makedirs(run_folder, exist_ok=True)
 
-# Set the video file path within the run folder
+# Set the video file path within the run folder for the full run video
 video_filepath = os.path.join(run_folder, "mario_run.mp4")
 writer = None  # VideoWriter is created only after determining the frame size
 
@@ -271,14 +271,21 @@ def load_checkpoint(filename="checkpoint.pth"):
 def main():
     global steps_done, epsilon, writer
 
-    num_episodes = 20
+    num_episodes = 500
     zoom_factor = 2.0  # scale factor for both display and video recording (2x zoom)
+    
+    # Variable to track the best episode reward and best video file path
+    best_episode_reward = float("-inf")
+    best_video_filepath = None
 
     # Create a log file in the run folder (append mode)
     log_filename = os.path.join(run_folder, "log.txt")
     log_file = open(log_filename, "a")
 
     for episode in range(num_episodes):
+        # Initialize a list to store frames for the current episode.
+        episode_frames = []
+
         # Reset the environment; obs is an RGB array (Gym returns (obs, info))
         obs, info = env.reset()
 
@@ -317,14 +324,17 @@ def main():
             cv2.imshow("Mario", display_frame)
             cv2.waitKey(1)
 
-            # 4) Write the upscaled frame to the video file
+            # 4) Write the upscaled frame to the run video file
             writer.write(display_frame)
+            
+            # 5) Save the frame for the episode-specific video
+            episode_frames.append(display_frame)
 
-            # 5) Select an action using epsilon-greedy policy
+            # 6) Select an action using epsilon-greedy policy
             action = select_action(state.unsqueeze(0))  # shape becomes [1, 1, 84, 84]
             next_obs, reward, terminated, truncated, info = env.step(action.item())
 
-            # 6) Reward shaping: Encourage moving right, penalize moving left or dying
+            # 7) Reward shaping: Encourage moving right, penalize moving left or dying
             if info.get("x_pos", 0) > last_x_pos:
                 reward += 1  # Reward for moving forward
             elif info.get("x_pos", 0) < last_x_pos:
@@ -341,11 +351,11 @@ def main():
 
             done = terminated or truncated
 
-            # 7) Process the next state
+            # 8) Process the next state
             next_state_arr = preprocess_observation(next_obs)
             next_state = torch.tensor(next_state_arr, dtype=torch.float32, device=device)
 
-            # 8) Store the experience in the replay memory
+            # 9) Store the experience in the replay memory
             memory.append((
                 state.cpu().numpy(),
                 action.item(),
@@ -354,19 +364,39 @@ def main():
                 float(done)
             ))
 
-            # 9) Prepare for the next step
+            # 10) Prepare for the next step
             state = next_state
             obs = next_obs
             total_reward += reward
 
-            # 10) Train the model
+            # 11) Train the model
             optimize_model()
             steps_done += 1
             epsilon = max(MIN_EPSILON, epsilon * EPSILON_DECAY)
 
-            # 11) Update the target network periodically
+            # 12) Update the target network periodically
             if steps_done % UPDATE_TARGET == 0:
                 target_net.load_state_dict(policy_net.state_dict())
+
+        # After the episode ends: check if this episode achieved a higher reward.
+        if total_reward > best_episode_reward:
+            best_episode_reward = total_reward
+            # If an older best video exists, remove it
+            if best_video_filepath is not None and os.path.exists(best_video_filepath):
+                os.remove(best_video_filepath)
+            # Create a new file name that includes the reward value (formatted to 2 decimal places)
+            best_video_filepath = os.path.join(run_folder, f"mario_best_run_{total_reward:.2f}.mp4")
+            print(f"[INFO] New best episode with reward {total_reward}. Saving best run video as '{os.path.basename(best_video_filepath)}'.")
+            # Create a VideoWriter for the best episode video.
+            # Use the frame size of the first frame in the episode.
+            if len(episode_frames) > 0:
+                height, width, _ = episode_frames[0].shape
+                fourcc = cv2.VideoWriter_fourcc(*'mp4v')
+                fps = 30.0
+                best_writer = cv2.VideoWriter(best_video_filepath, fourcc, fps, (width, height))
+                for frame in episode_frames:
+                    best_writer.write(frame)
+                best_writer.release()
 
         # Create a timestamp for the log entry
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")

@@ -10,9 +10,10 @@ This repository demonstrates a **Deep Q-Network (DQN) training** process on the 
 
 - **Train a DQN** in the [NES Super Mario Bros](https://github.com/Kautenja/gym-super-mario-bros) environment.
 - **Live visualization** via an OpenCV window: watch Mario’s actions in real time (displayed with a default 2x zoom for enhanced visibility).
-- **Continuous recording**: each frame is directly encoded into an `.mp4` using OpenCV’s `VideoWriter`.  
+- **Continuous recording**: Each frame is directly encoded into an `.mp4` using OpenCV’s `VideoWriter`.  
   > **Note:** The video is saved as `mario_run.mp4` inside a run folder automatically named with the current date and time in the format `YYYY-MM-DD_HH-MM-SS_run`.
-- **Graceful shutdown**: whether the training stops normally or via **Ctrl + C**, the environment and video file are closed correctly, leaving you with a playable recording.
+- **Best Run Recording**: In addition to the full run video, the script also tracks the episode with the highest total reward. The best episode is recorded separately and saved as `mario_best_run_<reward>.mp4` in the same run folder (where `<reward>` is the achieved reward, formatted to two decimal places). This allows you to quickly identify and replay the best performance.
+- **Graceful shutdown**: Whether the training stops normally or via **Ctrl + C**, the environment and video file are closed correctly, leaving you with a playable recording.
 - **Checkpointing & Resuming**: Save and load model checkpoints (network weights, optimizer state, training counters, replay memory, etc.) to resume training.
   - A checkpoint is automatically saved every 5 episodes as `checkpoint.pth`.
   - When exiting (even via a KeyboardInterrupt), a final checkpoint is saved as `checkpoint_final.pth`.
@@ -158,13 +159,16 @@ If you are on **Windows**, you may need some extra setup:
    ```
    - A window named **"Mario"** will pop up, showing the live environment (with a default 2x zoom in the display window).
    - The `.mp4` video is continuously recorded inside an automatically created folder named with the current date and time (e.g., `2025-02-17_14-35-22_run`) and saved as `mario_run.mp4`.
+   - In addition, the best performing episode (i.e., the episode with the highest total reward) is recorded separately as `mario_best_run_<reward>.mp4` within the same folder.
    - Training stops once the specified number of episodes is completed **or** if you hit **Ctrl + C** (KeyboardInterrupt). In either case, the script cleans up gracefully, closes the environment, and finalizes the video.
 
 ### Observing the Output
 
 - **OpenCV Window**: Real-time gameplay (displayed with a 2x zoom).
 - **Terminal Output**: Logs about the current episode, total reward, etc.
-- **Video File**: `mario_run.mp4` inside the run folder.
+- **Video Files**: 
+  - `mario_run.mp4` for the full run.
+  - `mario_best_run_<reward>.mp4` for the best episode.
 - **Log File**: A `log.txt` is created in the run folder, logging episode results with timestamps.
 
 ---
