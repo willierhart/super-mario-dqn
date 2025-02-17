@@ -19,6 +19,12 @@ This repository demonstrates a **Deep Q-Network (DQN) training** process on the 
 - **Automatic Device Selection**: The script automatically checks for Apple Metal (MPS) on macOS, NVIDIA GPU (CUDA), or falls back to CPU—whichever is available.
 - **Multiprocessing Compatibility**: To avoid issues with process creation (especially on macOS), the script uses `multiprocessing.set_start_method("spawn", force=True)`.
 - **Logging**: Episode results (including total rewards and timestamps) are logged to a `log.txt` file in the same run folder where the video is saved.
+- **Custom Reward Shaping**: The reward function has been tailored to guide the training process:
+  - **Forward Progress**: If Mario's current `x_pos` is greater than in the previous step, a bonus of +1 is added.
+  - **Regression Penalty**: Moving backward (a decrease in `x_pos`) incurs a penalty of -1.
+  - **Death Penalty**: If Mario dies (i.e., the episode terminates), a significant penalty of -50 is applied.
+  - **Goal Reward**: Reaching the flag (completing the level) grants a large bonus of +1000.
+  - **Scaling**: Finally, rewards are scaled by dividing by 10 and clipped to the range `[-1, 1]` to stabilize training.
 
 ---
 
@@ -173,6 +179,7 @@ Typical files in this repository include:
   - Multiprocessing compatibility fix (`spawn` start method)
   - Checkpoint saving/loading (resuming training)
   - DQN architecture and replay buffer logic
+  - **Custom Reward Shaping**: Rewards are adjusted to encourage forward progress, penalize regression and death, and significantly reward level completion by reaching the flag.
   - Training loop with live OpenCV display and continuous `.mp4` recording
   - Logging to a `log.txt` file
 - **`requirements.txt`**  
