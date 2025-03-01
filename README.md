@@ -59,6 +59,7 @@ torchvision==0.19.1
 opencv-python==4.11.0.86
 numpy==1.24.4
 moviepy==1.0.3
+tensorboard  # Ensure TensorBoard is installed
 ```
 
 This ensures you get the exact versions used for this project, minimizing potential compatibility issues.
@@ -96,8 +97,11 @@ Below are instructions on how to set up a **conda environment** (e.g., `mario_en
    # Gym, gym_super_mario_bros, other RL packages
    conda install -c conda-forge gym gym_super_mario_bros
 
-   # (Optional) If you want to handle video editing with MoviePy
+   # (Optional) For video processing with MoviePy
    conda install -c conda-forge moviepy ffmpeg
+
+   # TensorBoard
+   conda install -c conda-forge tensorboard
    ```
 
    **Option B: Using pip**
@@ -106,7 +110,8 @@ Below are instructions on how to set up a **conda environment** (e.g., `mario_en
                opencv-python \
                gym \
                gym_super_mario_bros \
-               moviepy
+               moviepy \
+               tensorboard
    ```
 
    *Alternatively, you can install exactly the pinned versions used in this repo via the `requirements.txt` method:*
@@ -183,7 +188,36 @@ If you are on **Windows**, you may need some extra setup:
 
 ---
 
-## 4. Project Structure
+## 4. TensorBoard Logging
+
+This project includes TensorBoard logging to help you monitor key training metrics such as Episode Reward, Loss, Q-Values, and Epsilon. The logs are automatically saved into the run folder along with the video recordings.
+
+### Installing TensorBoard
+
+If you haven't installed TensorBoard yet, you can install it via pip:
+  
+```bash
+pip install tensorboard
+```
+
+### Launching TensorBoard
+
+After you start the training script, a new run folder (e.g., `YYYY-MM-DD_HH-MM-SS_run`) is created with all TensorBoard logs. To view these metrics:
+
+1. Open a terminal and run the following command, replacing `<run_folder>` with the path to your run folder:
+   ```bash
+   tensorboard --logdir <run_folder>
+   ```
+   For example:
+   ```bash
+   tensorboard --logdir ./2025-03-01_12-34-56_run
+   ```
+
+2. Open your web browser and navigate to [http://localhost:6006](http://localhost:6006) to access the TensorBoard dashboard. Here you will see graphs of your training metrics in real time.
+
+---
+
+## 5. Project Structure
 
 Typical files in this repository include:
 
@@ -196,7 +230,7 @@ Typical files in this repository include:
   - **Enhanced DQN Features**: Frame stacking, prioritized experience replay, Huber loss, learning rate scheduler, and optimized replay buffer batch conversion.
   - Custom Reward Shaping: Rewards are adjusted to encourage forward progress, penalize regression and death, and significantly reward level completion by reaching the flag.
   - Training loop with live OpenCV display and continuous `.mp4` recording
-  - Logging to a `log.txt` file
+  - Logging to a `log.txt` file and TensorBoard logging for training metrics
 - **`requirements.txt`**  
   All pinned dependencies for this project.  
   Install them via `pip install -r requirements.txt`.
@@ -205,7 +239,7 @@ Typical files in this repository include:
 
 ---
 
-## 5. Checkpointing & Resuming
+## 6. Checkpointing & Resuming
 
 The script supports **saving and loading** checkpoints so you can stop training at any point and later resume without losing progress:
 
@@ -226,7 +260,7 @@ The script supports **saving and loading** checkpoints so you can stop training 
 
 ---
 
-## 6. Automatic Device Selection
+## 7. Automatic Device Selection
 
 Upon startup, the script automatically selects the best available device:
 1. **Apple Metal (MPS)** — on macOS with Apple Silicon.
@@ -237,7 +271,7 @@ All model operations then run on the chosen device, improving performance where 
 
 ---
 
-## 7. Contributing
+## 8. Contributing
 
 Feel free to open an **issue** or make a **pull request** if you find any bugs or want to add features (e.g., alternative action spaces, advanced reward shaping, etc.).
 

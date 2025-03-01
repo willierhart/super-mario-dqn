@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 
 """
-This script trains a simple DQN in the SuperMarioBros-v0 environment.
+This script trains a simple DQN in the SuperMarioBros-v0 environment
+with TensorBoard logging for monitoring training metrics.
 """
 
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -30,6 +31,9 @@ import torch.nn as nn
 import torch.optim as optim
 from collections import deque  # Not used anymore, but kept for reference
 from torchvision import transforms as T
+
+# Import TensorBoard SummaryWriter for logging
+from torch.utils.tensorboard import SummaryWriter
 
 # Suppress Gym warnings (optional)
 warnings.filterwarnings("ignore", message="Overwriting existing videos")
@@ -76,7 +80,7 @@ GAMMA = 0.99            # Discount factor
 LR = 0.00025            # Initial learning rate
 MEMORY_SIZE = 10000     # Replay memory size
 BATCH_SIZE = 32
-EPSILON_DECAY = 0.995   # Epsilon decay rate
+EPSILON_DECAY = 0.999   # Epsilon decay rate
 MIN_EPSILON = 0.01
 UPDATE_TARGET = 500     # Frequency of target network update
 STACK_SIZE = 4          # Number of frames to stack for state representation
@@ -239,10 +243,15 @@ def select_action(state_tensor):
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 # 13) Training: Replay sampling, optimization, and prioritized updates
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-def optimize_model():
+def optimize_model(tb_writer=None):
+    """
+    Samples a batch from memory, performs one optimization step,
+    and logs Loss, Q-value and Learning Rate to TensorBoard if a writer is provided.
+    """
     global steps_done, epsilon
     if len(memory) < BATCH_SIZE:
         return  # Not enough samples yet
+
     beta = 0.4  # Importance-sampling beta parameter
     batch, indices, weights = memory.sample(BATCH_SIZE, beta)
     
@@ -280,6 +289,12 @@ def optimize_model():
     
     steps_done += 1
     epsilon = max(MIN_EPSILON, epsilon * EPSILON_DECAY)
+    
+    # TensorBoard Logging
+    if tb_writer is not None:
+        tb_writer.add_scalar("Loss/Optimize", loss.item(), steps_done)
+        tb_writer.add_scalar("Q_Value/Mean", q_values.mean().item(), steps_done)
+        tb_writer.add_scalar("Learning_Rate", scheduler.get_last_lr()[0], steps_done)
 
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 # 14) Custom video recording with OpenCV VideoWriter
@@ -337,13 +352,16 @@ def load_checkpoint(filename="checkpoint.pth"):
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 def main():
     global steps_done, epsilon, writer
-    num_episodes = 500
+    num_episodes = 5000
     zoom_factor = 2.0  # Scaling factor for display and video recording
     
     best_episode_reward = float("-inf")
     best_video_filepath = None
     log_filename = os.path.join(run_folder, "log.txt")
     log_file = open(log_filename, "a")
+    
+    # Initialize TensorBoard SummaryWriter
+    tb_writer = SummaryWriter(log_dir=run_folder)
     
     for episode in range(num_episodes):
         episode_frames = []
@@ -418,7 +436,7 @@ def main():
             obs = next_obs
             total_reward += reward
             
-            optimize_model()
+            optimize_model(tb_writer)  # Pass the TensorBoard writer here
             
             if steps_done % UPDATE_TARGET == 0:
                 target_net.load_state_dict(policy_net.state_dict())
@@ -426,13 +444,16 @@ def main():
             # Check if the episode has ended
             done = terminated or truncated
         
+        # TensorBoard logging per episode
+        tb_writer.add_scalar("Episode/Reward", total_reward, episode)
+        tb_writer.add_scalar("Episode/Epsilon", epsilon, episode)
+        
         # Save best video if the episode achieved a higher reward
         if total_reward > best_episode_reward:
             best_episode_reward = total_reward
             if best_video_filepath is not None and os.path.exists(best_video_filepath):
                 os.remove(best_video_filepath)
             best_video_filepath = os.path.join(run_folder, f"mario_best_run_{total_reward:.2f}.mp4")
-            # Print reward rounded to two decimals
             print(f"[INFO] New best episode with reward {total_reward:.2f}. Saving best run video as '{os.path.basename(best_video_filepath)}'.")
             if len(episode_frames) > 0:
                 height, width, _ = episode_frames[0].shape
@@ -444,7 +465,6 @@ def main():
                 best_writer.release()
         
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        # Log reward rounded to two decimals
         log_message = f"[{timestamp}] Episode {episode + 1}, Reward: {total_reward:.2f}\n"
         print(log_message.strip())
         log_file.write(log_message)
@@ -454,6 +474,7 @@ def main():
             save_checkpoint("checkpoint.pth")
     
     log_file.close()
+    tb_writer.close()
 
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 # 17) Cleanup function
