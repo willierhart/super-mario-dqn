@@ -1,43 +1,29 @@
 #!/usr/bin/env python3
 
 """
-This script trains a simple DQN in the SuperMarioBros-v0 environment
-with TensorBoard logging for monitoring training metrics.
-
-Modifications:
-1. End each episode immediately upon losing a life (Single-Life Episode).
-2. Revised reward function to:
-   - Reward forward progress (movement to the right).
-   - Penalize losing a life (death).
-   - Significantly reward completing the level (flag_get).
-   - Optionally scale or clip rewards to stabilize training.
+This script trains a Dueling Double DQN in the SuperMarioBros-v0 environment
+with TensorBoard logging for training metrics.
 """
 
-# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 # 1) Multiprocessing fix (important for macOS, sometimes also for Linux/Windows)
-# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 import multiprocessing
 multiprocessing.set_start_method("spawn", force=True)
 
-# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 # 2) Standard libraries and warnings
-# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 import warnings
 import os
 import time
 import random
-from datetime import datetime  # imported for timestamping log entries
+from datetime import datetime
 
-# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 # 3) External libraries (OpenCV, Gym, PyTorch, Numpy, etc.)
-# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 import cv2
 import gym
 import torch
 import numpy as np
 import torch.nn as nn
 import torch.optim as optim
-from collections import deque  # Not used anymore, but kept for reference
+from collections import deque
 from torchvision import transforms as T
 
 # Import TensorBoard SummaryWriter for logging
@@ -54,9 +40,7 @@ warnings.filterwarnings("ignore", message="The environment creator metadata does
 warnings.filterwarnings("ignore", message="The environment SuperMarioBros-v0 is out of date. You should consider upgrading to version `v3`.")
 warnings.filterwarnings("ignore", message="The environment creator metadata doesn't include `render_modes`, contains: ['render.modes', 'video.frames_per_second']")
 
-# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 # 4) Imports specific to gym_super_mario_bros
-# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 import gym_super_mario_bros
 from gym_super_mario_bros.actions import SIMPLE_MOVEMENT
 from nes_py.wrappers import JoypadSpace
@@ -68,9 +52,7 @@ except ImportError:
     print("Warning: MoviePy is not installed! Please run 'pip install moviepy'")
     print("if you want to further process the generated .mp4 later.\n")
 
-# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 # 5) Device selection (CPU / CUDA / Apple Metal if available)
-# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 if torch.backends.mps.is_available():
     device = torch.device("mps")
     print("Using Apple Metal (MPS) device.")
@@ -81,31 +63,26 @@ else:
     device = torch.device("cpu")
     print("Using CPU device.")
 
-# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 # 6) Hyperparameters and global variables
-# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 GAMMA = 0.99            # Discount factor
 LR = 0.00025            # Initial learning rate
 MEMORY_SIZE = 10000     # Replay memory size
 BATCH_SIZE = 32
 EPSILON_DECAY = 0.999   # Epsilon decay rate
 MIN_EPSILON = 0.01
-UPDATE_TARGET = 500     # Frequency of target network update
+UPDATE_TARGET = 100     # Frequency of target network update
 STACK_SIZE = 4          # Number of frames to stack for state representation
 
-# Counters for training steps and epsilon value
 steps_done = 0
 epsilon = 1.0
 
-# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 # 7) Helper function: Frame preprocessing and stacking
-# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 def preprocess_observation(obs):
     """
     Converts the input frame (RGB) to grayscale,
     resizes it to [84x84], and returns a numpy array
     with shape [1, 84, 84] (1 channel).
-    Then, normalizes pixel values from 0..255 to 0..1.
+    Normalizes pixel values from 0..255 to 0..1.
     """
     if obs.ndim == 3:
         obs = cv2.cvtColor(obs, cv2.COLOR_RGB2GRAY)
@@ -126,40 +103,57 @@ def stack_frames(frame_buffer, new_frame, is_new_episode):
     else:
         frame_buffer.append(processed)
         frame_buffer.pop(0)
-    # Concatenate along the first dimension to form a stacked state (STACK_SIZE, 84, 84)
+    # Concatenate along the channel dimension to form a stacked state (STACK_SIZE, 84, 84)
     stacked_state = np.concatenate(frame_buffer, axis=0)
     return frame_buffer, stacked_state
 
-# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-# 8) DQN network class
-# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+# 8) Dueling DQN network class with a deeper architecture
 class DQN(nn.Module):
     """
-    A simple DQN with 3 convolutional layers and 2 dense layers.
-    Expects input_dim channels (STACK_SIZE for frame stacking) and returns
-    output_dim actions.
+    A Dueling Double DQN with shared convolutional layers and separate streams for 
+    state-value and advantage. The deeper architecture allows for capturing more 
+    complex features from the input state.
     """
-    def __init__(self, input_dim, output_dim):
-        super().__init__()
-        self.network = nn.Sequential(
+    def __init__(self, input_dim, num_actions):
+        super(DQN, self).__init__()
+        # Convolutional feature extractor
+        self.feature = nn.Sequential(
             nn.Conv2d(input_dim, 32, kernel_size=8, stride=4),
             nn.ReLU(),
             nn.Conv2d(32, 64, kernel_size=4, stride=2),
             nn.ReLU(),
             nn.Conv2d(64, 64, kernel_size=3, stride=1),
             nn.ReLU(),
-            nn.Flatten(),
+            nn.Flatten()
+        )
+        # Assuming input shape (STACK_SIZE, 84, 84) results in 3136 features after conv layers
+        # Value stream with an extra hidden layer for a deeper network
+        self.value_stream = nn.Sequential(
             nn.Linear(3136, 512),
             nn.ReLU(),
-            nn.Linear(512, output_dim)
+            nn.Linear(512, 256),
+            nn.ReLU(),
+            nn.Linear(256, 1)
+        )
+        # Advantage stream with an extra hidden layer for a deeper network
+        self.advantage_stream = nn.Sequential(
+            nn.Linear(3136, 512),
+            nn.ReLU(),
+            nn.Linear(512, 256),
+            nn.ReLU(),
+            nn.Linear(256, num_actions)
         )
 
     def forward(self, x):
-        return self.network(x)
+        features = self.feature(x)
+        value = self.value_stream(features)
+        advantage = self.advantage_stream(features)
+        # Combine value and advantage streams to obtain Q-values:
+        # Q(s,a) = V(s) + (A(s,a) - mean(A(s)))
+        q_vals = value + (advantage - advantage.mean(dim=1, keepdim=True))
+        return q_vals
 
-# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 # 9) Prioritized Replay Buffer Class
-# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 class PrioritizedReplayBuffer:
     """
     A simple implementation of Prioritized Experience Replay.
@@ -206,34 +200,26 @@ class PrioritizedReplayBuffer:
     def __len__(self):
         return len(self.buffer)
 
-# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 # 10) Environment initialization
-# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 env = gym_super_mario_bros.make(
     "SuperMarioBros-v0",
-    apply_api_compatibility=True,  # new Gym API (5 return values)
-    render_mode="rgb_array"        # ensures obs is an RGB array
+    apply_api_compatibility=True,
+    render_mode="rgb_array"
 )
 env = JoypadSpace(env, SIMPLE_MOVEMENT)
 num_actions = env.action_space.n
 
-# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 # 11) Initialize DQN, Target Network, Optimizer, Scheduler and Replay Buffer
-# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 policy_net = DQN(STACK_SIZE, num_actions).to(device)
 target_net = DQN(STACK_SIZE, num_actions).to(device)
 target_net.load_state_dict(policy_net.state_dict())
 target_net.eval()
 
 optimizer = optim.Adam(policy_net.parameters(), lr=LR)
-# Learning Rate Scheduler: Decays the learning rate every 1000 steps by gamma=0.99
 scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1000, gamma=0.99)
-
 memory = PrioritizedReplayBuffer(MEMORY_SIZE, alpha=0.6)
 
-# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 # 12) Action selection: Epsilon-Greedy
-# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 def select_action(state_tensor):
     """
     Selects an action using an epsilon-greedy policy.
@@ -247,13 +233,12 @@ def select_action(state_tensor):
         with torch.no_grad():
             return policy_net(state_tensor).max(dim=1)[1].view(1, 1)
 
-# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-# 13) Training: Replay sampling, optimization, and prioritized updates
-# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
+# 13) Training: Replay sampling, optimization, and prioritized updates with Double DQN
 def optimize_model(tb_writer=None):
     """
     Samples a batch from memory, performs one optimization step,
     and logs Loss, Q-value and Learning Rate to TensorBoard if a writer is provided.
+    Implements a Double DQN update to reduce overestimation bias.
     """
     global steps_done, epsilon
     if len(memory) < BATCH_SIZE:
@@ -270,19 +255,20 @@ def optimize_model(tb_writer=None):
     dones = torch.tensor(dones, dtype=torch.float32, device=device)
     weights_tensor = torch.tensor(weights, dtype=torch.float32, device=device)
     
-    # Current Q-values
+    # Current Q-values for taken actions
     q_values = policy_net(states).gather(1, actions.unsqueeze(1)).squeeze()
-    # Max Q-values from the target network
-    next_q_values = target_net(next_states).max(dim=1)[0]
+    
+    # Double DQN: select best actions using policy_net and evaluate them using target_net
+    with torch.no_grad():
+        next_state_actions = policy_net(next_states).max(dim=1)[1].unsqueeze(1)
+        next_q_values = target_net(next_states).gather(1, next_state_actions).squeeze(1)
     
     # Bellman update
     expected_q_values = rewards + (GAMMA * next_q_values * (1 - dones))
     
-    # Huber loss
+    # Compute Huber loss weighted by importance-sampling weights
     td_errors = torch.abs(q_values - expected_q_values).detach()
     loss = torch.nn.functional.smooth_l1_loss(q_values, expected_q_values, reduction='none')
-    
-    # Importance sampling weights
     loss = (loss * weights_tensor).mean()
     
     optimizer.zero_grad()
@@ -290,30 +276,26 @@ def optimize_model(tb_writer=None):
     optimizer.step()
     scheduler.step()
     
-    # Update priorities
+    # Update priorities in the replay buffer
     new_priorities = td_errors.cpu().numpy() + 1e-6
     memory.update_priorities(indices, new_priorities)
     
     steps_done += 1
     epsilon = max(MIN_EPSILON, epsilon * EPSILON_DECAY)
     
-    # TensorBoard logging
+    # Logging to TensorBoard
     if tb_writer is not None:
         tb_writer.add_scalar("Loss/Optimize", loss.item(), steps_done)
         tb_writer.add_scalar("Q_Value/Mean", q_values.mean().item(), steps_done)
         tb_writer.add_scalar("Learning_Rate", scheduler.get_last_lr()[0], steps_done)
 
-# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 # 14) Custom video recording with OpenCV VideoWriter
-# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 run_folder = f"./{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}_run"
 os.makedirs(run_folder, exist_ok=True)
 video_filepath = os.path.join(run_folder, "mario_run.mp4")
 writer = None  # Will be initialized once we have the first frame
 
-# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 # 15) Checkpoint saving and loading
-# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 def save_checkpoint(filename="checkpoint.pth"):
     """
     Saves the current training state including network weights,
@@ -354,9 +336,7 @@ def load_checkpoint(filename="checkpoint.pth"):
     memory.pos = checkpoint["pos"]
     print(f"[INFO] Checkpoint loaded from {filename}")
 
-# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 # 16) Main training function
-# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 def main():
     global steps_done, epsilon, writer
     num_episodes = 2000
@@ -371,7 +351,7 @@ def main():
     tb_writer = SummaryWriter(log_dir=run_folder)
     
     for episode in range(num_episodes):
-        # Reset environment and gather initial info
+        # Reset environment and get initial observation and info
         obs, info = env.reset()
         
         # Initialize the VideoWriter if needed
@@ -392,7 +372,7 @@ def main():
         
         # Track Mario's last x-position and lives for custom reward logic
         last_x_pos = info.get("x_pos", 0)
-        last_lives = info.get("life", 2)  # Default to 2 if not provided
+        last_lives = info.get("life", 2)
         
         while not done:
             # Convert RGB to BGR for display
@@ -409,36 +389,25 @@ def main():
             writer.write(display_frame)
             episode_frames.append(display_frame)
             
-            # Epsilon-greedy action
+            # Epsilon-greedy action selection
             action = select_action(state.unsqueeze(0))
             next_obs, reward, terminated, truncated, info = env.step(action.item())
             
             # Check if Mario lost a life (end episode immediately if so)
             current_lives = info.get("life", 2)
             if current_lives < last_lives and current_lives > 0:
-                # Mario lost exactly one life, but still has some left
                 terminated = True
             
-            # Reward shaping
-            # 1) Encourage forward movement
+            # Reward shaping: Encourage forward movement, penalize death, and reward level completion
             current_x_pos = info.get("x_pos", 0)
             if current_x_pos > last_x_pos:
-                # Scale progress reward, e.g. +0.1 per pixel
                 reward += (current_x_pos - last_x_pos) * 0.1
-            
-            # 2) Penalize death (if Mario lost a life)
             if current_lives < last_lives:
                 reward -= 50
-            
-            # 3) Big reward for reaching the flag (level completion)
             if info.get("flag_get", False):
-                # Encourage level completion strongly
                 reward += 2000
             
-            # Optionally clip or scale the final reward
-            # This helps stabilize training if rewards vary widely
             reward = np.clip(reward, -100, 2000)
-            
             last_x_pos = current_x_pos
             last_lives = current_lives
             
@@ -462,18 +431,17 @@ def main():
             
             optimize_model(tb_writer)
             
-            # Update target network
+            # Update target network periodically
             if steps_done % UPDATE_TARGET == 0:
                 target_net.load_state_dict(policy_net.state_dict())
             
-            # Check if the episode has ended
             done = terminated or truncated
         
         # Log metrics to TensorBoard
         tb_writer.add_scalar("Episode/Reward", total_reward, episode)
         tb_writer.add_scalar("Episode/Epsilon", epsilon, episode)
         
-        # Save best run video
+        # Save best run video if current episode reward is the best so far
         if total_reward > best_episode_reward:
             best_episode_reward = total_reward
             if best_video_filepath is not None and os.path.exists(best_video_filepath):
@@ -503,9 +471,7 @@ def main():
     log_file.close()
     tb_writer.close()
 
-# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 # 17) Cleanup function
-# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 def cleanup():
     """
     Closes the environment, destroys OpenCV windows, and releases the VideoWriter.
@@ -521,9 +487,7 @@ def cleanup():
         writer.release()
     print(f"Video written to: {video_filepath}")
 
-# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 # 18) Main guard and exception handling
-# ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 if __name__ == "__main__":
     user_input = input("Start new training (n) or load from checkpoint (l)? [n/l]: ")
     if user_input.lower() == 'l':
