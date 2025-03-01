@@ -1,11 +1,13 @@
-# Ignoriere macOS-spezifische Dateien
+*
+!.gitignore
+!README.md
+!requirements.txt
+!mario_gym.py
+!2025-02-17_19-28-38_run/
+!2025-02-17_19-28-38_run/**
 .DS_Store
-
-# Ignoriere Python Cache-Ordner
 __pycache__/
 *.pyc
 *.pyo
-
-# Optional: ignoriere weitere übliche versteckte Dateien oder Umgebungsdateien
 *.swp
 .env

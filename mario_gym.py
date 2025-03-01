@@ -3,6 +3,14 @@
 """
 This script trains a simple DQN in the SuperMarioBros-v0 environment
 with TensorBoard logging for monitoring training metrics.
+
+Modifications:
+1. End each episode immediately upon losing a life (Single-Life Episode).
+2. Revised reward function to:
+   - Reward forward progress (movement to the right).
+   - Penalize losing a life (death).
+   - Significantly reward completing the level (flag_get).
+   - Optionally scale or clip rewards to stabilize training.
 """
 
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -199,7 +207,7 @@ class PrioritizedReplayBuffer:
         return len(self.buffer)
 
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-# 10) Environment without RecordVideo - we record frames manually!
+# 10) Environment initialization
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 env = gym_super_mario_bros.make(
     "SuperMarioBros-v0",
@@ -221,7 +229,6 @@ optimizer = optim.Adam(policy_net.parameters(), lr=LR)
 # Learning Rate Scheduler: Decays the learning rate every 1000 steps by gamma=0.99
 scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1000, gamma=0.99)
 
-# Use Prioritized Experience Replay Buffer instead of a simple deque
 memory = PrioritizedReplayBuffer(MEMORY_SIZE, alpha=0.6)
 
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
@@ -255,7 +262,6 @@ def optimize_model(tb_writer=None):
     beta = 0.4  # Importance-sampling beta parameter
     batch, indices, weights = memory.sample(BATCH_SIZE, beta)
     
-    # Unpack batch and convert to tensors using torch.from_numpy for optimization
     states, actions, rewards, next_states, dones = zip(*batch)
     states = torch.from_numpy(np.stack(states)).float().to(device)
     next_states = torch.from_numpy(np.stack(next_states)).float().to(device)
@@ -264,33 +270,34 @@ def optimize_model(tb_writer=None):
     dones = torch.tensor(dones, dtype=torch.float32, device=device)
     weights_tensor = torch.tensor(weights, dtype=torch.float32, device=device)
     
-    # Compute Q(s, a) and Q(s', a')
+    # Current Q-values
     q_values = policy_net(states).gather(1, actions.unsqueeze(1)).squeeze()
+    # Max Q-values from the target network
     next_q_values = target_net(next_states).max(dim=1)[0]
     
-    # Compute expected Q values using the Bellman equation
+    # Bellman update
     expected_q_values = rewards + (GAMMA * next_q_values * (1 - dones))
     
-    # Compute TD error and use Huber loss (smooth L1 loss) with element-wise reduction
+    # Huber loss
     td_errors = torch.abs(q_values - expected_q_values).detach()
     loss = torch.nn.functional.smooth_l1_loss(q_values, expected_q_values, reduction='none')
     
-    # Apply importance-sampling weights to stabilize learning
+    # Importance sampling weights
     loss = (loss * weights_tensor).mean()
     
     optimizer.zero_grad()
     loss.backward()
     optimizer.step()
-    scheduler.step()  # Update learning rate scheduler
+    scheduler.step()
     
-    # Update priorities in the replay buffer
-    new_priorities = td_errors.cpu().numpy() + 1e-6  # small constant to avoid zero priority
+    # Update priorities
+    new_priorities = td_errors.cpu().numpy() + 1e-6
     memory.update_priorities(indices, new_priorities)
     
     steps_done += 1
     epsilon = max(MIN_EPSILON, epsilon * EPSILON_DECAY)
     
-    # TensorBoard Logging
+    # TensorBoard logging
     if tb_writer is not None:
         tb_writer.add_scalar("Loss/Optimize", loss.item(), steps_done)
         tb_writer.add_scalar("Q_Value/Mean", q_values.mean().item(), steps_done)
@@ -302,7 +309,7 @@ def optimize_model(tb_writer=None):
 run_folder = f"./{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}_run"
 os.makedirs(run_folder, exist_ok=True)
 video_filepath = os.path.join(run_folder, "mario_run.mp4")
-writer = None  # VideoWriter will be initialized after determining frame size
+writer = None  # Will be initialized once we have the first frame
 
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 # 15) Checkpoint saving and loading
@@ -352,22 +359,22 @@ def load_checkpoint(filename="checkpoint.pth"):
 # ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
 def main():
     global steps_done, epsilon, writer
-    num_episodes = 5000
-    zoom_factor = 2.0  # Scaling factor for display and video recording
+    num_episodes = 2000
+    zoom_factor = 2.0
     
     best_episode_reward = float("-inf")
     best_video_filepath = None
     log_filename = os.path.join(run_folder, "log.txt")
     log_file = open(log_filename, "a")
     
-    # Initialize TensorBoard SummaryWriter
+    # TensorBoard writer
     tb_writer = SummaryWriter(log_dir=run_folder)
     
     for episode in range(num_episodes):
-        episode_frames = []
+        # Reset environment and gather initial info
         obs, info = env.reset()
         
-        # Initialize VideoWriter if not already done
+        # Initialize the VideoWriter if needed
         if writer is None:
             height, width, channels = obs.shape
             new_width = int(width * zoom_factor)
@@ -376,16 +383,19 @@ def main():
             fps = 30.0
             writer = cv2.VideoWriter(video_filepath, fourcc, fps, (new_width, new_height))
         
-        # Initialize frame stack for the new episode
+        episode_frames = []
         frame_buffer, state_stack = stack_frames(None, obs, True)
         state = torch.from_numpy(state_stack).float().to(device)
         
         done = False
         total_reward = 0.0
-        last_x_pos = 0
+        
+        # Track Mario's last x-position and lives for custom reward logic
+        last_x_pos = info.get("x_pos", 0)
+        last_lives = info.get("life", 2)  # Default to 2 if not provided
         
         while not done:
-            # Convert RGB to BGR for OpenCV display
+            # Convert RGB to BGR for display
             bgr_frame = cv2.cvtColor(obs, cv2.COLOR_RGB2BGR)
             display_frame = cv2.resize(
                 bgr_frame,
@@ -399,56 +409,71 @@ def main():
             writer.write(display_frame)
             episode_frames.append(display_frame)
             
-            # Select an action using epsilon-greedy policy
+            # Epsilon-greedy action
             action = select_action(state.unsqueeze(0))
-            try:
-                next_obs, reward, terminated, truncated, info = env.step(action.item())
-            except ValueError:
-                # The environment is done, so break out of the loop gracefully
-                break
-
-            # Reward shaping: encourage moving right, penalize moving left or dying
-            if info.get("x_pos", 0) > last_x_pos:
-                reward += 1
-            elif info.get("x_pos", 0) < last_x_pos:
-                reward -= 1
-            if terminated:
-                reward -= 50
-            if info.get("flag_get", False):
-                reward += 1000
-            reward = np.clip(reward / 10, -1, 1)
-            last_x_pos = info.get("x_pos", 0)
+            next_obs, reward, terminated, truncated, info = env.step(action.item())
             
-            # Update frame stack with new observation
+            # Check if Mario lost a life (end episode immediately if so)
+            current_lives = info.get("life", 2)
+            if current_lives < last_lives and current_lives > 0:
+                # Mario lost exactly one life, but still has some left
+                terminated = True
+            
+            # Reward shaping
+            # 1) Encourage forward movement
+            current_x_pos = info.get("x_pos", 0)
+            if current_x_pos > last_x_pos:
+                # Scale progress reward, e.g. +0.1 per pixel
+                reward += (current_x_pos - last_x_pos) * 0.1
+            
+            # 2) Penalize death (if Mario lost a life)
+            if current_lives < last_lives:
+                reward -= 50
+            
+            # 3) Big reward for reaching the flag (level completion)
+            if info.get("flag_get", False):
+                # Encourage level completion strongly
+                reward += 2000
+            
+            # Optionally clip or scale the final reward
+            # This helps stabilize training if rewards vary widely
+            reward = np.clip(reward, -100, 2000)
+            
+            last_x_pos = current_x_pos
+            last_lives = current_lives
+            
+            # Update frame stack
             frame_buffer, next_state_stack = stack_frames(frame_buffer, next_obs, False)
             next_state = torch.from_numpy(next_state_stack).float().to(device)
             
-            # Store the transition in the replay buffer
+            # Store transition
+            done_float = float(terminated or truncated)
             memory.push((
-                state.cpu().numpy(),  # stacked state
+                state.cpu().numpy(),
                 action.item(),
                 reward,
-                next_state.cpu().numpy(),  # stacked next state
-                float(terminated or truncated)
+                next_state.cpu().numpy(),
+                done_float
             ))
             
             state = next_state
             obs = next_obs
             total_reward += reward
             
-            optimize_model(tb_writer)  # Pass the TensorBoard writer here
+            optimize_model(tb_writer)
             
+            # Update target network
             if steps_done % UPDATE_TARGET == 0:
                 target_net.load_state_dict(policy_net.state_dict())
             
             # Check if the episode has ended
             done = terminated or truncated
         
-        # TensorBoard logging per episode
+        # Log metrics to TensorBoard
         tb_writer.add_scalar("Episode/Reward", total_reward, episode)
         tb_writer.add_scalar("Episode/Epsilon", epsilon, episode)
         
-        # Save best video if the episode achieved a higher reward
+        # Save best run video
         if total_reward > best_episode_reward:
             best_episode_reward = total_reward
             if best_video_filepath is not None and os.path.exists(best_video_filepath):
@@ -464,12 +489,14 @@ def main():
                     best_writer.write(frame)
                 best_writer.release()
         
+        # Console & file logging
         timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        log_message = f"[{timestamp}] Episode {episode + 1}, Reward: {total_reward:.2f}\n"
-        print(log_message.strip())
-        log_file.write(log_message)
+        log_message = f"[{timestamp}] Episode {episode + 1}, Reward: {total_reward:.2f}"
+        print(log_message)
+        log_file.write(log_message + "\n")
         log_file.flush()
         
+        # Periodic checkpoint saving
         if (episode + 1) % 50 == 0:
             save_checkpoint("checkpoint.pth")
     
