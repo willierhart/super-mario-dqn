@@ -86,6 +86,7 @@ opencv-python==4.11.0.86
 numpy==1.24.4
 moviepy==1.0.3
 tensorboard  
+six
 ```
 
 ### 3.2 Installing via Anaconda
@@ -189,6 +190,7 @@ The script logs key training metrics (such as Episode Reward, Loss, Q-Values, Le
 If TensorBoard is not installed yet, run:
 ```bash
 pip install tensorboard
+pip install six
 ```
 
 ### Launching TensorBoard
