@@ -1,22 +1,22 @@
 # Super Mario Dueling Double DQN – A Live & Recorded Reinforcement Learning Demo
 
-This repository demonstrates an enhanced **Dueling Double DQN** training process on the classic *Super Mario Bros* environment using [gym_super_mario_bros](https://github.com/Kautenja/gym-super-mario-bros). The training process includes live gameplay visualization via an OpenCV window and continuous recording of the run into an `.mp4` video file.
+This repository demonstrates an enhanced **Dueling Double DQN** training process on the classic *Super Mario Bros* environment using [gym_super_mario_bros](https://github.com/Kautenja/gym-super-mario-bros). The training process includes live gameplay visualization via an OpenCV window, periodic recording of episode runs, and automatic best-run extraction into `.mp4` video files.
 
-> **Note:** Whether you stop the training normally or interrupt it (e.g., using **Ctrl + C**), the script ensures that the video is finalized correctly and the environment is properly closed.
+> **Note:** Whether you stop the training normally or interrupt it (e.g., using **Ctrl + C**), the script ensures that the latest video and checkpoints are finalized correctly and the environment is properly closed.
 
 ---
 
 ## 1. Overview
 
 - **Dueling Double DQN with Prioritized Replay:**  
-  The script trains a DQN using a deeper network architecture with separate value and advantage streams. In addition, it employs a prioritized experience replay buffer with importance sampling and uses the Huber (smooth L1) loss for enhanced training stability.
+  The script trains a DQN using a deeper network architecture with separate value and advantage streams. In addition, it employs a prioritized experience replay buffer with importance sampling, Huber (smooth L1) loss, and Polyak soft target updates for enhanced training stability.
 
 - **Multiprocessing Compatibility:**  
   The script applies a fix by setting the multiprocessing start method to `spawn`, ensuring compatibility (especially on macOS).
 
 - **Live Visualization & Recording:**  
-  - **Real-Time Display:** An OpenCV window named **"Mario"** shows the gameplay in real time (displayed with a default 2× zoom for enhanced visibility).  
-  - **Continuous Recording:** Every frame is encoded into a full run video (`mario_run.mp4`) saved inside a folder automatically named with the current date and time (`YYYY-MM-DD_HH-MM-SS_run`).
+  - **Real-Time Display:** An OpenCV window named **"Mario"** shows the gameplay in real time (displayed with a default 2× zoom for enhanced visibility). This can be turned off via the `SHOW_GUI` flag in the script for headless server training.  
+  - **Periodic Recording:** Instead of writing a single huge file, the script records gameplay videos every 50 episodes (configurable via `RECORD_VIDEO_EVERY`) to reduce disk space. It buffers raw frames safely in RAM to prevent Out-of-Memory (OOM) errors.
 
 - **Best Run Extraction:**  
   The script tracks the episode with the highest total reward and saves it separately as `mario_best_run_<reward>.mp4` in the same run folder.
@@ -51,8 +51,17 @@ This implementation includes several improvements over the standard DQN algorith
 - **Frame Stacking:**  
   Uses 4 consecutive frames as the state representation, providing temporal context to the agent.
 
+- **Frame Skipping:**  
+  Repeats the selected action for 4 frames (configurable via `FRAME_SKIP`), reducing neural network computational load and providing a wider motion representation.
+
+- **Polyak Soft Target Updates:**  
+  Updates target network weights slowly at every training step ($\tau = 0.005$) to stabilize value updates and avoid target value oscillations.
+
+- **Beta Annealing:**  
+  Gradually increases the importance sampling correction weight $\beta$ from 0.4 to 1.0 over the course of training steps.
+
 - **Prioritized Experience Replay:**  
-  Implements prioritized replay with importance sampling and dynamic priority updates to improve learning efficiency.
+  Implements prioritized replay with TD-error priorities and importance sampling weights to improve learning efficiency.
 
 - **Huber Loss:**  
   Replaces the Mean Squared Error (MSE) loss with the Huber (smooth L1) loss for improved training stability.
@@ -166,16 +175,23 @@ For more details, refer to [How to install Visual C++ Build Tools](https://stack
      ```python
      Start new training (n) or load from checkpoint (l)? [n/l]:
      ```
-   - **Real-Time Display:** An OpenCV window named **"Mario"** will open, showing live gameplay with a 2× zoom.
+   - **Real-Time Display:** An OpenCV window named **"Mario"** will open, showing live gameplay with a 2× zoom (unless `SHOW_GUI` is set to `False` in the script).
    - **Video Recording:**  
-     - A full run video is saved as `mario_run.mp4` inside a run folder named with the current date and time (e.g., `2025-03-01_12-34-56_run`).
+     - A video is recorded periodically (every 50 episodes) and saved as `mario_episode_<episode>_reward_<reward>.mp4` inside the run folder.
      - The best-performing episode is also saved as `mario_best_run_<reward>.mp4` (with `<reward>` showing the episode’s total reward formatted to two decimal places).
    - **Checkpointing:**  
      - Checkpoints are saved every 50 episodes as `checkpoint.pth`.
      - Upon termination (even via **Ctrl + C**), a final checkpoint is saved as `checkpoint_final.pth`.
 
-4. **Output Observation:**
-   - **OpenCV Window:** Displays real-time gameplay.
+4. **Configurable Settings in `mario_gym.py`:**
+   At the top of the file, you can customize:
+   * `SHOW_GUI = True`: Set to `False` to run headless (e.g. on virtual machines/servers without a monitor).
+   * `RECORD_VIDEO_EVERY = 50`: Freq of recording episode videos.
+   * `MAX_EPISODE_FRAMES = 5000`: Caps maximum buffered video frames in RAM to prevent OOM.
+   * `FRAME_SKIP = 4`: Frame skipping frequency.
+
+5. **Output Observation:**
+   - **OpenCV Window:** Displays real-time gameplay (when enabled).
    - **Terminal:** Shows episode logs, rewards, and progress messages.
    - **Run Folder:** Contains the recorded video files, TensorBoard logs, and a `log.txt` file with detailed episode logs.
 
@@ -190,7 +206,6 @@ The script logs key training metrics (such as Episode Reward, Loss, Q-Values, Le
 If TensorBoard is not installed yet, run:
 ```bash
 pip install tensorboard
-pip install six
 ```
 
 ### Launching TensorBoard
@@ -210,16 +225,16 @@ To monitor training metrics:
 
 ## 6. Project Structure
 
-The repository typically includes:
+The repository includes:
 
 - **`mario_gym.py`**  
-  The main training script, which contains:
+  The main training script, containing:
   - Multiprocessing start method fix for compatibility.
   - Automatic device selection (Apple MPS, CUDA, or CPU).
-  - Dueling Double DQN architecture with deeper value and advantage streams.
-  - Prioritized experience replay implementation.
+  - Dueling Double DQN architecture with value and advantage streams.
+  - Prioritized experience replay implementation with Polyak soft updates.
   - Custom reward shaping that rewards forward progress, penalizes life loss, and heavily rewards level completion.
-  - Live gameplay visualization via OpenCV and continuous `.mp4` recording.
+  - Live gameplay visualization via OpenCV and periodic memory-safe video recording.
   - Logging via TensorBoard and a local `log.txt` file.
   - Checkpoint saving and loading mechanisms.
 
