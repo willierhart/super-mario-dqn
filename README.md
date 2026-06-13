@@ -31,7 +31,8 @@ This repository demonstrates an enhanced **Dueling Double DQN** training process
   - **Clipping:** Rewards are clipped to the range **[–100, 2000]**.
 
 - **Checkpointing & Resuming:**  
-  - **Periodic Saving:** A checkpoint is automatically saved every 50 episodes as `checkpoint.pth`.
+  - **Periodic Saving:** A checkpoint is automatically saved every 500 episodes (configurable via `SAVE_CHECKPOINT_EVERY`) as `checkpoint.pth`.
+  - **Asynchronous & Memory-Optimized:** Checkpoint files are saved asynchronously in a background thread to prevent pausing the training loop, and the replay buffer RAM usage is optimized using `uint8` data types (reducing footprint from ~11/22GB to ~2.8GB).
   - **Final Checkpoint:** When the training stops (even via **Ctrl + C**), a final checkpoint is saved as `checkpoint_final.pth`.
   - **Loading Option:** On startup, you can choose to load an existing checkpoint to resume training.
 
@@ -63,7 +64,7 @@ This implementation includes several improvements over the standard DQN algorith
   Gradually increases the importance sampling correction weight $\beta$ from 0.4 to 1.0 over the course of training steps.
 
 - **Sum-Tree Prioritized Experience Replay:**  
-  Implements prioritized experience replay using a Sum-Tree data structure. This allows sampling and priority update operations in $O(\log N)$ time, enabling the replay buffer size to scale up to 50,000 transitions (configurable via `MEMORY_SIZE`) without performance degradation.
+  Implements prioritized experience replay using a Sum-Tree data structure. This allows sampling and priority update operations in $O(\log N)$ time, enabling the replay buffer size to scale up to 50,000 transitions (configurable via `MEMORY_SIZE`) without performance degradation. State transitions are stored as compact `uint8` arrays and normalized to `float32` on the fly on the GPU to drastically reduce memory usage.
 
 - **Gradient Clipping:**  
   Clips network gradient norms to a maximum value of 10.0 to prevent exploding gradients caused by high shaped rewards (like the +2000 level completion bonus).
@@ -188,8 +189,9 @@ For more details, refer to [How to install Visual C++ Build Tools](https://stack
      - A video is recorded periodically (every 50 episodes) and saved as `mario_episode_<episode>_reward_<reward>.mp4` inside the run folder.
      - The best-performing episode is also saved as `mario_best_run_<reward>.mp4` (with `<reward>` showing the episode’s total reward formatted to two decimal places).
    - **Checkpointing:**  
-     - Checkpoints are saved every 50 episodes as `checkpoint.pth`.
-     - Upon termination (even via **Ctrl + C**), a final checkpoint is saved as `checkpoint_final.pth`.
+     - Checkpoints are saved periodically (every 500 episodes by default) as `checkpoint.pth`.
+     - Checkpoint writing is performed asynchronously in a background thread so training is not blocked.
+     - Upon termination (even via **Ctrl + C**), a final checkpoint is saved synchronously as `checkpoint_final.pth`.
 
 4. **Configurable Settings in `mario_gym.py`:**
    At the top of the file, you can customize:
@@ -199,6 +201,7 @@ For more details, refer to [How to install Visual C++ Build Tools](https://stack
    * `FRAME_SKIP = 4`: Frame skipping frequency.
    * `MEMORY_SIZE = 50000`: Capacity of the replay buffer.
    * `INITIAL_EXPLORATION_STEPS = 2000`: Warm-up steps using random actions before training starts.
+   * `SAVE_CHECKPOINT_EVERY = 500`: Frequency (in episodes) for saving checkpoints.
 
 5. **Output Observation:**
    - **OpenCV Window:** Displays real-time gameplay (when enabled).
@@ -260,10 +263,11 @@ The repository includes:
 
 The script supports saving and resuming training through checkpoints:
 - **Saving:**  
-  - A checkpoint is automatically saved every 50 episodes as `checkpoint.pth`.
-  - When interrupted (e.g., via **Ctrl + C**), a final checkpoint is saved as `checkpoint_final.pth`.
+  - A checkpoint is automatically saved every 500 episodes (configurable via `SAVE_CHECKPOINT_EVERY`) as `checkpoint.pth`.
+  - Checkpoint files are saved asynchronously in the background so that writing to disk does not interrupt training.
+  - When interrupted (e.g., via **Ctrl + C**), a final checkpoint is saved synchronously as `checkpoint_final.pth`.
 - **Resuming:**  
-  - At startup, choose to load from a checkpoint to restore the model weights, optimizer state, replay memory, and training counters.
+  - At startup, choose to load from a checkpoint to restore the model weights, optimizer state, replay memory (with automatic conversion of float arrays to `uint8` for backward compatibility), and training counters.
   - Ensure the network architecture remains unchanged between saving and loading.
 
 ---

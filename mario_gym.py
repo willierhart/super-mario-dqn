@@ -30,6 +30,11 @@ RECORD_VIDEO_EVERY = 50 # Save a video of the episode every 50 episodes.
 MAX_EPISODE_FRAMES = 5000 # Safety limit for in-memory frames to prevent OOM.
 SHOW_GUI = True         # Show the OpenCV display window. Set to False for headless servers.
 
+# Checkpoint configuration
+SAVE_CHECKPOINTS = True  # Set to True to enable saving checkpoints (network weights/state).
+SAVE_REPLAY_BUFFER = False # Set to True to save replay buffer data (requires ~2.8GB of disk space when enabled).
+SAVE_CHECKPOINT_EVERY = 500 # Save checkpoint every N episodes.
+
 # Global variables to track training progress.
 steps_done = 0          # Total number of environment steps taken so far.
 epsilon = 1.0           # Initial exploration rate for epsilon-greedy policy.
@@ -51,6 +56,8 @@ import warnings
 import os
 import time
 import random
+import threading
+import copy
 from datetime import datetime
 
 # =============================================================================
@@ -134,14 +141,14 @@ class SkipFrame(gym.Wrapper):
 # =============================================================================
 def preprocess_observation(obs):
     """
-    Convert the input RGB frame to grayscale, resize it to 84x84,
-    and normalize pixel values from 0-255 to 0-1.
+    Convert the input RGB frame to grayscale and resize it to 84x84.
+    Returns a uint8 numpy array to save memory.
     """
     if obs.ndim == 3:
         obs = cv2.cvtColor(obs, cv2.COLOR_RGB2GRAY)
     obs = cv2.resize(obs, (84, 84), interpolation=cv2.INTER_AREA)
     obs = np.expand_dims(obs, axis=0)
-    return obs / 255.0
+    return obs
 
 def stack_frames(frame_buffer, new_frame, is_new_episode):
     """
@@ -353,8 +360,8 @@ def optimize_model(tb_writer=None):
     batch, indices, weights = memory.sample(BATCH_SIZE, beta)
     
     states, actions, rewards, next_states, dones = zip(*batch)
-    states = torch.from_numpy(np.stack(states)).float().to(device)
-    next_states = torch.from_numpy(np.stack(next_states)).float().to(device)
+    states = torch.from_numpy(np.stack(states)).float().to(device) / 255.0
+    next_states = torch.from_numpy(np.stack(next_states)).float().to(device) / 255.0
     actions = torch.tensor(actions, dtype=torch.long, device=device)
     rewards = torch.tensor(rewards, dtype=torch.float32, device=device)
     dones = torch.tensor(dones, dtype=torch.float32, device=device)
@@ -431,23 +438,40 @@ def save_video(frames, filepath, zoom_factor=2.0, fps=15.0):
 # =============================================================================
 # Checkpoint Saving and Loading Functions
 # =============================================================================
-def save_checkpoint(filename="checkpoint.pth"):
-    checkpoint = {
-        "policy_net": policy_net.state_dict(),
-        "target_net": target_net.state_dict(),
-        "optimizer": optimizer.state_dict(),
-        "scheduler": scheduler.state_dict(),
+def save_checkpoint(filename="checkpoint.pth", is_async=True):
+    if not SAVE_CHECKPOINTS:
+        return
+    
+    # Clone state dicts and deepcopy other states on CPU to avoid race conditions during training
+    checkpoint_cpu = {
+        "policy_net": {k: v.cpu().clone() for k, v in policy_net.state_dict().items()},
+        "target_net": {k: v.cpu().clone() for k, v in target_net.state_dict().items()},
+        "optimizer": copy.deepcopy(optimizer.state_dict()),
+        "scheduler": copy.deepcopy(scheduler.state_dict()),
         "epsilon": epsilon,
         "steps_done": steps_done,
-        # Save SumTree state
-        "buffer_tree": memory.tree.tree,
-        "buffer_data": memory.tree.data,
-        "buffer_write": memory.tree.write,
-        "buffer_n_entries": memory.tree.n_entries,
-        "buffer_max_priority": memory.max_priority
     }
-    torch.save(checkpoint, filename)
-    print(f"[INFO] Checkpoint saved to {filename}")
+    if SAVE_REPLAY_BUFFER:
+        checkpoint_cpu.update({
+            "buffer_tree": memory.tree.tree.copy(),
+            "buffer_data": copy.deepcopy(memory.tree.data),
+            "buffer_write": memory.tree.write,
+            "buffer_n_entries": memory.tree.n_entries,
+            "buffer_max_priority": memory.max_priority
+        })
+        
+    def save_job(cp_dict, path):
+        try:
+            torch.save(cp_dict, path)
+            print(f"[INFO] Checkpoint saved to {path}")
+        except Exception as e:
+            print(f"[ERROR] Failed to save checkpoint to {path}: {e}")
+
+    if is_async:
+        print(f"[INFO] Starting asynchronous checkpoint save to {filename}...")
+        threading.Thread(target=save_job, args=(checkpoint_cpu, filename), daemon=True).start()
+    else:
+        save_job(checkpoint_cpu, filename)
 
 def load_checkpoint(filename="checkpoint.pth"):
     global policy_net, target_net, optimizer, scheduler, epsilon, steps_done, memory
@@ -462,13 +486,36 @@ def load_checkpoint(filename="checkpoint.pth"):
     epsilon = checkpoint["epsilon"]
     steps_done = checkpoint["steps_done"]
     
-    # Restore SumTree state
-    memory.tree.tree = checkpoint["buffer_tree"]
-    memory.tree.data = checkpoint["buffer_data"]
-    memory.tree.write = checkpoint["buffer_write"]
-    memory.tree.n_entries = checkpoint["buffer_n_entries"]
-    memory.max_priority = checkpoint.get("buffer_max_priority", 1.0)
-    print(f"[INFO] Checkpoint loaded from {filename}")
+    # Restore SumTree state only if it is present in the checkpoint
+    if "buffer_tree" in checkpoint:
+        memory.tree.tree = checkpoint["buffer_tree"]
+        
+        # Convert loaded float state arrays to uint8 if they are floats to free up memory immediately!
+        loaded_data = checkpoint["buffer_data"]
+        converted_count = 0
+        for i in range(len(loaded_data)):
+            if loaded_data[i] is not None:
+                state, action, reward, next_state, done = loaded_data[i]
+                if state.dtype != np.uint8:
+                    if state.max() <= 1.0:
+                        state = (state * 255.0).astype(np.uint8)
+                        next_state = (next_state * 255.0).astype(np.uint8)
+                    else:
+                        state = state.astype(np.uint8)
+                        next_state = next_state.astype(np.uint8)
+                    loaded_data[i] = (state, action, reward, next_state, done)
+                    converted_count += 1
+                    
+        if converted_count > 0:
+            print(f"[INFO] Converted {converted_count} buffer entries from float to uint8 for memory optimization.")
+            
+        memory.tree.data = loaded_data
+        memory.tree.write = checkpoint["buffer_write"]
+        memory.tree.n_entries = checkpoint["buffer_n_entries"]
+        memory.max_priority = checkpoint.get("buffer_max_priority", 1.0)
+        print(f"[INFO] Checkpoint and Replay Buffer loaded from {filename}")
+    else:
+        print(f"[INFO] Checkpoint loaded (without Replay Buffer) from {filename}")
 
 # =============================================================================
 # Main Training Loop
@@ -493,7 +540,7 @@ def main():
         episode_frames = []
         
         frame_buffer, state_stack = stack_frames(None, obs, True)
-        state = torch.from_numpy(state_stack).float().to(device)
+        state = torch.from_numpy(state_stack).float().to(device) / 255.0
         
         done = False
         total_reward = 0.0
@@ -549,18 +596,19 @@ def main():
             last_lives = current_lives
             
             frame_buffer, next_state_stack = stack_frames(frame_buffer, next_obs, False)
-            next_state = torch.from_numpy(next_state_stack).float().to(device)
+            next_state = torch.from_numpy(next_state_stack).float().to(device) / 255.0
             
             done_float = float(terminated or truncated)
             memory.push((
-                state.cpu().numpy(),
+                state_stack,
                 action.item(),
                 reward,
-                next_state.cpu().numpy(),
+                next_state_stack,
                 done_float
             ))
             
             state = next_state
+            state_stack = next_state_stack
             obs = next_obs
             total_reward += reward
             
@@ -596,7 +644,7 @@ def main():
         log_file.flush()
         
         # Save checkpoints periodically
-        if (episode + 1) % 50 == 0:
+        if (episode + 1) % SAVE_CHECKPOINT_EVERY == 0:
             save_checkpoint("checkpoint.pth")
             
     log_file.close()
@@ -628,5 +676,5 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         print("\nManual interrupt (Ctrl + C).")
     finally:
-        save_checkpoint("checkpoint_final.pth")
+        save_checkpoint("checkpoint_final.pth", is_async=False)
         cleanup()
