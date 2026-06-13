@@ -2,6 +2,8 @@
 
 This repository demonstrates an enhanced **Dueling Double DQN** training process on the classic *Super Mario Bros* environment using [gym_super_mario_bros](https://github.com/Kautenja/gym-super-mario-bros). The training process includes live gameplay visualization via an OpenCV window, periodic recording of episode runs, and automatic best-run extraction into `.mp4` video files.
 
+![image](https://github.com/user-attachments/assets/32573929-c44e-47cb-8f35-628ef13a2f15)
+
 > **Note:** Whether you stop the training normally or interrupt it (e.g., using **Ctrl + C**), the script ensures that the latest video and checkpoints are finalized correctly and the environment is properly closed.
 
 ---
