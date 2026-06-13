@@ -62,8 +62,14 @@ This implementation includes several improvements over the standard DQN algorith
 - **Beta Annealing:**  
   Gradually increases the importance sampling correction weight $\beta$ from 0.4 to 1.0 over the course of training steps.
 
-- **Prioritized Experience Replay:**  
-  Implements prioritized replay with TD-error priorities and importance sampling weights to improve learning efficiency.
+- **Sum-Tree Prioritized Experience Replay:**  
+  Implements prioritized experience replay using a Sum-Tree data structure. This allows sampling and priority update operations in $O(\log N)$ time, enabling the replay buffer size to scale up to 50,000 transitions (configurable via `MEMORY_SIZE`) without performance degradation.
+
+- **Gradient Clipping:**  
+  Clips network gradient norms to a maximum value of 10.0 to prevent exploding gradients caused by high shaped rewards (like the +2000 level completion bonus).
+
+- **Exploration Warm-up Phase:**  
+  Delays model training and epsilon decay for the first 2,000 environment steps (configurable via `INITIAL_EXPLORATION_STEPS`) to populate the replay buffer with purely random transitions.
 
 - **Huber Loss:**  
   Replaces the Mean Squared Error (MSE) loss with the Huber (smooth L1) loss for improved training stability.
@@ -191,6 +197,8 @@ For more details, refer to [How to install Visual C++ Build Tools](https://stack
    * `RECORD_VIDEO_EVERY = 50`: Freq of recording episode videos.
    * `MAX_EPISODE_FRAMES = 5000`: Caps maximum buffered video frames in RAM to prevent OOM.
    * `FRAME_SKIP = 4`: Frame skipping frequency.
+   * `MEMORY_SIZE = 50000`: Capacity of the replay buffer.
+   * `INITIAL_EXPLORATION_STEPS = 2000`: Warm-up steps using random actions before training starts.
 
 5. **Output Observation:**
    - **OpenCV Window:** Displays real-time gameplay (when enabled).

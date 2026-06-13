@@ -3,7 +3,8 @@
 This script trains a Dueling Double DQN in the SuperMarioBros-v0 environment
 with TensorBoard logging for training metrics.
 It includes optimizations for frame skipping, memory usage, video recording,
-and stable target network updates.
+stable target network updates, gradient clipping, and a Sum-Tree based
+Prioritized Replay Buffer for performance scaling.
 """
 
 # =============================================================================
@@ -11,7 +12,7 @@ and stable target network updates.
 # =============================================================================
 GAMMA = 0.99            # Discount factor for future rewards.
 LR = 0.00025            # Learning rate for the optimizer.
-MEMORY_SIZE = 10000     # Maximum capacity of the replay memory.
+MEMORY_SIZE = 50000     # Increased capacity of the replay memory (scaled thanks to Sum-Tree).
 BATCH_SIZE = 32         # Mini-batch size for training the network.
 EPSILON_DECAY = 0.99995 # Slower decay rate for epsilon per environment step (~90k steps to 0.01).
 MIN_EPSILON = 0.01      # Minimum value for epsilon to ensure some exploration.
@@ -20,6 +21,9 @@ NUM_EPISODES = 10000    # Total number of training episodes.
 OPTIMIZE_FREQ = 4       # Perform optimization step every 4 environment steps.
 TAU = 0.005             # Soft target network update rate (Polyak averaging).
 FRAME_SKIP = 4          # Number of frames to repeat action (Frame Skipping).
+
+# Warm-up phase configuration
+INITIAL_EXPLORATION_STEPS = 2000 # Number of steps to collect random experiences before learning starts.
 
 # Recording and Rendering config
 RECORD_VIDEO_EVERY = 50 # Save a video of the episode every 50 episodes.
@@ -195,49 +199,110 @@ class DQN(nn.Module):
         return q_vals
 
 # =============================================================================
-# Prioritized Replay Buffer Implementation
+# Sum-Tree Data Structure for Prioritized Replay Buffer
+# =============================================================================
+class SumTree:
+    """
+    A binary tree data structure where parent nodes are the sum of their children.
+    Enables O(log N) sampling and updates.
+    """
+    def __init__(self, capacity):
+        self.capacity = capacity
+        self.tree = np.zeros(2 * capacity - 1)
+        self.data = np.zeros(capacity, dtype=object)
+        self.write = 0
+        self.n_entries = 0
+
+    def _propagate(self, idx, change):
+        parent = (idx - 1) // 2
+        self.tree[parent] += change
+        if parent != 0:
+            self._propagate(parent, change)
+
+    def _retrieve(self, idx, s):
+        left = 2 * idx + 1
+        right = left + 1
+
+        if left >= len(self.tree):
+            return idx
+
+        if s <= self.tree[left]:
+            return self._retrieve(left, s)
+        else:
+            return self._retrieve(right, s - self.tree[left])
+
+    def total(self):
+        return self.tree[0]
+
+    def add(self, p, data):
+        idx = self.write + self.capacity - 1
+        self.data[self.write] = data
+        self.update(idx, p)
+
+        self.write += 1
+        if self.write >= self.capacity:
+            self.write = 0
+
+        if self.n_entries < self.capacity:
+            self.n_entries += 1
+
+    def update(self, idx, p):
+        change = p - self.tree[idx]
+        self.tree[idx] = p
+        self._propagate(idx, change)
+
+    def get(self, s):
+        idx = self._retrieve(0, s)
+        dataIdx = idx - self.capacity + 1
+        return (idx, self.tree[idx], self.data[dataIdx])
+
+# =============================================================================
+# Prioritized Replay Buffer using Sum-Tree
 # =============================================================================
 class PrioritizedReplayBuffer:
     """
-    Prioritized replay buffer with importance-sampling weight computation.
+    Prioritized replay buffer with O(log N) operations using Sum-Tree.
     """
     def __init__(self, capacity, alpha=0.6):
+        self.tree = SumTree(capacity)
         self.capacity = capacity
         self.alpha = alpha
-        self.buffer = []
-        self.priorities = []
-        self.pos = 0
+        self.epsilon = 1e-5
+        self.max_priority = 1.0
 
     def push(self, transition):
-        max_priority = max(self.priorities, default=1.0)
-        if len(self.buffer) < self.capacity:
-            self.buffer.append(transition)
-            self.priorities.append(max_priority)
-        else:
-            self.buffer[self.pos] = transition
-            self.priorities[self.pos] = max_priority
-            self.pos = (self.pos + 1) % self.capacity
+        self.tree.add(self.max_priority, transition)
 
     def sample(self, batch_size, beta=0.4):
-        if len(self.buffer) == self.capacity:
-            priorities = np.array(self.priorities)
-        else:
-            priorities = np.array(self.priorities[:len(self.buffer)])
-        probabilities = priorities ** self.alpha
-        probabilities /= probabilities.sum()
-        indices = np.random.choice(len(self.buffer), batch_size, p=probabilities)
-        samples = [self.buffer[idx] for idx in indices]
-        total = len(self.buffer)
-        weights = (total * probabilities[indices]) ** (-beta)
-        weights /= weights.max()
-        return samples, indices, weights
+        batch = []
+        indices = []
+        priorities = []
+        segment = self.tree.total() / batch_size
+
+        for i in range(batch_size):
+            a = segment * i
+            b = segment * (i + 1)
+            s = random.uniform(a, b)
+            (idx, p, data) = self.tree.get(s)
+            priorities.append(p)
+            batch.append(data)
+            indices.append(idx)
+
+        # Compute importance-sampling weights
+        sampling_probabilities = np.array(priorities) / (self.tree.total() if self.tree.total() > 0 else 1.0)
+        weights = (self.tree.n_entries * sampling_probabilities) ** (-beta)
+        weights /= weights.max() if weights.max() > 0 else 1.0
+
+        return batch, indices, weights
 
     def update_priorities(self, indices, priorities):
         for idx, priority in zip(indices, priorities):
-            self.priorities[idx] = priority
+            p = (priority + self.epsilon) ** self.alpha
+            self.tree.update(idx, p)
+            self.max_priority = max(self.max_priority, p)
 
     def __len__(self):
-        return len(self.buffer)
+        return self.tree.n_entries
 
 # =============================================================================
 # Environment Initialization
@@ -280,7 +345,7 @@ def select_action(state_tensor):
 # =============================================================================
 def optimize_model(tb_writer=None):
     global steps_done
-    if len(memory) < BATCH_SIZE:
+    if len(memory) < INITIAL_EXPLORATION_STEPS:
         return
 
     # Anneal beta from 0.4 to 1.0 over the first 100,000 steps
@@ -310,6 +375,10 @@ def optimize_model(tb_writer=None):
     
     optimizer.zero_grad()
     loss.backward()
+    
+    # Clip gradients to prevent explosion due to large shaped rewards
+    torch.nn.utils.clip_grad_norm_(policy_net.parameters(), max_norm=10.0)
+    
     optimizer.step()
     scheduler.step()
     
@@ -370,9 +439,12 @@ def save_checkpoint(filename="checkpoint.pth"):
         "scheduler": scheduler.state_dict(),
         "epsilon": epsilon,
         "steps_done": steps_done,
-        "memory": memory.buffer,
-        "priorities": memory.priorities,
-        "pos": memory.pos
+        # Save SumTree state
+        "buffer_tree": memory.tree.tree,
+        "buffer_data": memory.tree.data,
+        "buffer_write": memory.tree.write,
+        "buffer_n_entries": memory.tree.n_entries,
+        "buffer_max_priority": memory.max_priority
     }
     torch.save(checkpoint, filename)
     print(f"[INFO] Checkpoint saved to {filename}")
@@ -389,9 +461,13 @@ def load_checkpoint(filename="checkpoint.pth"):
     scheduler.load_state_dict(checkpoint["scheduler"])
     epsilon = checkpoint["epsilon"]
     steps_done = checkpoint["steps_done"]
-    memory.buffer = checkpoint["memory"]
-    memory.priorities = checkpoint["priorities"]
-    memory.pos = checkpoint["pos"]
+    
+    # Restore SumTree state
+    memory.tree.tree = checkpoint["buffer_tree"]
+    memory.tree.data = checkpoint["buffer_data"]
+    memory.tree.write = checkpoint["buffer_write"]
+    memory.tree.n_entries = checkpoint["buffer_n_entries"]
+    memory.max_priority = checkpoint.get("buffer_max_priority", 1.0)
     print(f"[INFO] Checkpoint loaded from {filename}")
 
 # =============================================================================
@@ -447,9 +523,12 @@ def main():
             action = select_action(state.unsqueeze(0))
             next_obs, reward, terminated, truncated, info = env.step(action.item())
             
-            # Decay epsilon on every environment interaction step
+            # Increment environment steps
             steps_done += 1
-            epsilon = max(MIN_EPSILON, epsilon * EPSILON_DECAY)
+            
+            # Decay epsilon only after warm-up phase (exploration steps completed)
+            if steps_done > INITIAL_EXPLORATION_STEPS:
+                epsilon = max(MIN_EPSILON, epsilon * EPSILON_DECAY)
             
             # Lose life ends episode early
             current_lives = info.get("life", 2)
