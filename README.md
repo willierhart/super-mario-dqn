@@ -20,21 +20,24 @@ This repository demonstrates an enhanced **Dueling Double DQN** training process
   - **Real-Time Display:** An OpenCV window named **"Mario"** shows the gameplay in real time (displayed with a default 2× zoom for enhanced visibility). This can be turned off via the `SHOW_GUI` flag in the script for headless server training.  
   - **Periodic Recording:** Instead of writing a single huge file, the script records gameplay videos every 50 episodes (configurable via `RECORD_VIDEO_EVERY`) to reduce disk space. It buffers raw frames safely in RAM to prevent Out-of-Memory (OOM) errors.
 
-- **Best Run Extraction:**  
-  The script tracks the episode with the highest total reward and saves it separately as `mario_best_run_<reward>.mp4` in the same run folder.
+- **Multi-Level Mixed Training:**  
+  The agent is trained across multiple levels of World 1 (World 1-1, 1-2, 1-3, 1-4) selected randomly at the start of each episode. This allows the agent to generalize across different color schemes and gameplay structures (overworld, underworld, athletic platforms, and castle).
+
+- **Best Run Extraction per Level:**  
+  The script tracks the best run separately for each level and saves the gameplay video as `mario_best_run_<level>_<reward>.mp4` inside the run folder, providing clear level-by-level evaluation.
 
 - **Custom Reward Shaping:**  
   The reward function has been tuned to guide the training process:
   - **Forward Progress:** A bonus of **0.1 × (distance advanced)** is added if Mario’s current `x_pos` exceeds the previous value.
   - **Life Loss Penalty:** Losing a life (while still having remaining lives) immediately terminates the episode and applies a **–50 penalty**.
-  - **Level Completion Bonus:** Reaching the flag gives a bonus of **+2000**.
+  - **Level Completion Bonus:** Reaching the flag/axe gives a bonus of **+2000**.
   - **Clipping:** Rewards are clipped to the range **[–100, 2000]**.
 
-- **Checkpointing & Resuming:**  
+- **Checkpointing & Resuming with Exploration Reset:**  
   - **Periodic Saving:** A checkpoint is automatically saved every 500 episodes (configurable via `SAVE_CHECKPOINT_EVERY`) as `checkpoint.pth`.
-  - **Asynchronous & Memory-Optimized:** Checkpoint files are saved asynchronously in a background thread to prevent pausing the training loop, and the replay buffer RAM usage is optimized using `uint8` data types (reducing footprint from ~11/22GB to ~2.8GB).
+  - **Asynchronous & Memory-Optimized:** Checkpoint files are saved asynchronously in a background thread to prevent pausing the training loop, and the replay memory uses compact `uint8` structures.
   - **Final Checkpoint:** When the training stops (even via **Ctrl + C**), a final checkpoint is saved as `checkpoint_final.pth`.
-  - **Loading Option:** On startup, you can choose to load an existing checkpoint to resume training.
+  - **Loading & Exploration Reset:** On startup, you can load an existing checkpoint to resume training normally, or resume with an **exploration reset** (overriding epsilon to `0.10` and resetting learning rate to `0.0001` to prevent learning plateaus).
 
 - **Automatic Device Selection:**  
   The script automatically detects and uses the best available device:
@@ -180,14 +183,18 @@ For more details, refer to [How to install Visual C++ Build Tools](https://stack
    ```bash
    python mario_gym.py
    ```
-   - At startup, you will be prompted to choose between starting new training or loading from a checkpoint:
-     ```python
-     Start new training (n) or load from checkpoint (l)? [n/l]:
+   - At startup, you will be prompted to choose between starting new training, loading a checkpoint, or resuming with an exploration reset:
+     ```text
+     Start new training (n), load checkpoint (l), or load and reset exploration (r)? [n/l/r]:
      ```
+     You can also use command-line flags to skip the prompt:
+     - `-n` or `--new`: Start new training.
+     - `-l` or `--load`: Resume training from the checkpoint normally.
+     - `-r` or `--resume-reset`: Resume training from the checkpoint and reset exploration (epsilon to `0.10` and learning rate to `0.0001`).
    - **Real-Time Display:** An OpenCV window named **"Mario"** will open, showing live gameplay with a 2× zoom (unless `SHOW_GUI` is set to `False` in the script).
    - **Video Recording:**  
-     - A video is recorded periodically (every 50 episodes) and saved as `mario_episode_<episode>_reward_<reward>.mp4` inside the run folder.
-     - The best-performing episode is also saved as `mario_best_run_<reward>.mp4` (with `<reward>` showing the episode’s total reward formatted to two decimal places).
+     - A video is recorded periodically (every 50 episodes) and saved as `mario_episode_<episode>_<level>_reward_<reward>.mp4` inside the run folder.
+     - The best-performing episode of each level is saved as `mario_best_run_<level>_<reward>.mp4`.
    - **Checkpointing:**  
      - Checkpoints are saved periodically (every 500 episodes by default) as `checkpoint.pth`.
      - Checkpoint writing is performed asynchronously in a background thread so training is not blocked.
@@ -267,8 +274,9 @@ The script supports saving and resuming training through checkpoints:
   - Checkpoint files are saved asynchronously in the background so that writing to disk does not interrupt training.
   - When interrupted (e.g., via **Ctrl + C**), a final checkpoint is saved synchronously as `checkpoint_final.pth`.
 - **Resuming:**  
-  - At startup, choose to load from a checkpoint to restore the model weights, optimizer state, replay memory (with automatic conversion of float arrays to `uint8` for backward compatibility), and training counters.
-  - Ensure the network architecture remains unchanged between saving and loading.
+  - **Normal Resume (`l` / `--load`):** Restores model weights, optimizer state, replay memory, and steps_done directly from the checkpoint. 
+  - **Resume & Exploration Reset (`r` / `--resume-reset`):** Restores weights and replay memory, but overrides epsilon back to `0.10` and resets the learning rate back to `0.0001` (by resetting the scheduler step count). This is useful to break out of learning plateaus caused by learning rate decay and low exploration rate.
+  - Ensure the network architecture and list of levels remain unchanged between saving and loading.
 
 ---
 

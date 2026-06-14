@@ -22,6 +22,10 @@ OPTIMIZE_FREQ = 4       # Perform optimization step every 4 environment steps.
 TAU = 0.005             # Soft target network update rate (Polyak averaging).
 FRAME_SKIP = 4          # Number of frames to repeat action (Frame Skipping).
 
+# Multi-level Mixed Training configuration
+TRAINING_MODE = "mixed" # "mixed" for random selection, "curriculum" for step-by-step
+LEVELS = ["SuperMarioBros-1-1-v0", "SuperMarioBros-1-2-v0", "SuperMarioBros-1-3-v0", "SuperMarioBros-1-4-v0"]
+
 # Warm-up phase configuration
 INITIAL_EXPLORATION_STEPS = 2000 # Number of steps to collect random experiences before learning starts.
 
@@ -473,7 +477,7 @@ def save_checkpoint(filename="checkpoint.pth", is_async=True):
     else:
         save_job(checkpoint_cpu, filename)
 
-def load_checkpoint(filename="checkpoint.pth"):
+def load_checkpoint(filename="checkpoint.pth", reset_exploration=False):
     global policy_net, target_net, optimizer, scheduler, epsilon, steps_done, memory
     if not os.path.exists(filename):
         print(f"[WARNING] Checkpoint file '{filename}' does not exist. Skipping load.")
@@ -517,6 +521,17 @@ def load_checkpoint(filename="checkpoint.pth"):
     else:
         print(f"[INFO] Checkpoint loaded (without Replay Buffer) from {filename}")
 
+    if reset_exploration:
+        # Reset exploration rate to allow finding new strategies in challenging levels
+        epsilon = 0.10
+        # Reset learning rate in the optimizer to a healthy learning speed
+        for param_group in optimizer.param_groups:
+            param_group['lr'] = 0.0001
+        # Reinitialize scheduler settings with reset learning rate and step counter
+        scheduler.base_lrs = [0.0001]
+        scheduler.last_epoch = 0
+        print(f"[INFO] Exploration reset: Epsilon set to {epsilon:.2f}, Learning Rate reset to {optimizer.param_groups[0]['lr']}")
+
 # =============================================================================
 # Main Training Loop
 # =============================================================================
@@ -525,8 +540,11 @@ run_folder = f"./{datetime.now().strftime('%Y-%m-%d_%H-%M-%S')}_run"
 os.makedirs(run_folder, exist_ok=True)
 
 def main():
-    global steps_done, epsilon
-    best_episode_reward = float("-inf")
+    global steps_done, epsilon, env
+    best_rewards = {level: float("-inf") for level in LEVELS}
+    current_level_idx = 0
+    curriculum_rewards = []
+    
     log_filename = os.path.join(run_folder, "log.txt")
     log_file = open(log_filename, "a")
     
@@ -534,6 +552,25 @@ def main():
     zoom_factor = 2.0
     
     for episode in range(NUM_EPISODES):
+        # Select level
+        if TRAINING_MODE == "mixed":
+            level_name = random.choice(LEVELS)
+        else:  # curriculum
+            level_name = LEVELS[current_level_idx]
+            
+        # Recreate environment for selected level to clear state
+        try:
+            env.close()
+        except Exception:
+            pass
+        env = gym_super_mario_bros.make(
+            level_name,
+            apply_api_compatibility=True,
+            render_mode="rgb_array"
+        )
+        env = JoypadSpace(env, SIMPLE_MOVEMENT)
+        env = SkipFrame(env, skip=FRAME_SKIP)
+        
         obs, info = env.reset()
         
         # We store raw observations in memory (low RAM footprint)
@@ -619,29 +656,44 @@ def main():
             
             done = terminated or truncated
         
+        # Extract level suffix for file names and logging (e.g. 1-1, 1-2)
+        level_suffix = level_name.replace("SuperMarioBros-", "").replace("-v0", "")
+        
         # Log episode metrics
         tb_writer.add_scalar("Episode/Reward", total_reward, episode)
+        tb_writer.add_scalar(f"Episode_Reward/{level_suffix}", total_reward, episode)
         tb_writer.add_scalar("Episode/Epsilon", epsilon, episode)
         
         # Check if we should save this episode's video (scheduled)
         should_record = (episode + 1) % RECORD_VIDEO_EVERY == 0
         if should_record:
-            rec_path = os.path.join(run_folder, f"mario_episode_{episode + 1}_reward_{total_reward:.2f}.mp4")
+            rec_path = os.path.join(run_folder, f"mario_episode_{episode + 1}_{level_suffix}_reward_{total_reward:.2f}.mp4")
             save_video(episode_frames, rec_path, fps=15.0)
             
-        # Check if this is the best run and save if so
-        if total_reward > best_episode_reward:
-            best_episode_reward = total_reward
-            best_path = os.path.join(run_folder, f"mario_best_run_{total_reward:.2f}.mp4")
-            print(f"[INFO] New best episode with reward {total_reward:.2f}. Saving video.")
+        # Check if this is the best run for this specific level and save if so
+        if total_reward > best_rewards[level_name]:
+            best_rewards[level_name] = total_reward
+            best_path = os.path.join(run_folder, f"mario_best_run_{level_suffix}_{total_reward:.2f}.mp4")
+            print(f"[INFO] New best episode for level {level_suffix} with reward {total_reward:.2f}. Saving video.")
             save_video(episode_frames, best_path, fps=15.0)
         
         # Log details to console and file
         timestamp = datetime.now().strftime("%Y-%m-%d %H-%M-%S")
-        log_message = f"[{timestamp}] Episode {episode + 1}, Steps: {steps_done}, Epsilon: {epsilon:.4f}, Reward: {total_reward:.2f}"
+        log_message = f"[{timestamp}] Episode {episode + 1}, Level: {level_suffix}, Steps: {steps_done}, Epsilon: {epsilon:.4f}, Reward: {total_reward:.2f}"
         print(log_message)
         log_file.write(log_message + "\n")
         log_file.flush()
+        
+        # Update curriculum learning state if active
+        if TRAINING_MODE == "curriculum":
+            curriculum_rewards.append(total_reward)
+            if len(curriculum_rewards) >= 10:
+                avg_reward = np.mean(curriculum_rewards[-10:])
+                if avg_reward > 1900:
+                    if current_level_idx < len(LEVELS) - 1:
+                        current_level_idx += 1
+                        curriculum_rewards.clear()
+                        print(f"[CURRICULUM] Level {LEVELS[current_level_idx-1]} solved (Avg: {avg_reward:.2f})! Advancing to {LEVELS[current_level_idx]}.")
         
         # Save checkpoints periodically
         if (episode + 1) % SAVE_CHECKPOINT_EVERY == 0:
@@ -665,10 +717,26 @@ def cleanup():
 # Main Guard
 # =============================================================================
 if __name__ == "__main__":
-    user_input = input("Start new training (n) or load from checkpoint (l)? [n/l]: ")
-    if user_input.lower() == 'l':
+    import sys
+    mode = None
+    if len(sys.argv) > 1:
+        if sys.argv[1] in ['-l', '--load']:
+            mode = 'l'
+        elif sys.argv[1] in ['-r', '--resume-reset']:
+            mode = 'r'
+        elif sys.argv[1] in ['-n', '--new']:
+            mode = 'n'
+    
+    if mode is None:
+        user_input = input("Start new training (n), load checkpoint (l), or load and reset exploration (r)? [n/l/r]: ")
+        mode = user_input.lower()
+        
+    if mode == 'l':
         print("Loading checkpoint...")
-        load_checkpoint("checkpoint.pth")
+        load_checkpoint("checkpoint.pth", reset_exploration=False)
+    elif mode == 'r':
+        print("Loading checkpoint and resetting exploration...")
+        load_checkpoint("checkpoint.pth", reset_exploration=True)
     else:
         print("Starting new training from scratch...")
     try:
